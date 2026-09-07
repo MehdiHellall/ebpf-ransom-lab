@@ -76,10 +76,17 @@ class DoctorContext:
             free_bytes=shutil.disk_usage(storage_path).free,
             available_modules=frozenset(module_names),
             existing_paths=frozenset(
-                path for path in candidate_paths if Path(path).exists()
+                path for path in candidate_paths if _path_exists(Path(path))
             ),
             data_directory_writable=os.access(storage_path, os.W_OK),
         )
+
+
+def _path_exists(path: Path) -> bool:
+    try:
+        return path.exists()
+    except OSError:
+        return False
 
 
 def _nearest_existing_parent(path: Path) -> Path:

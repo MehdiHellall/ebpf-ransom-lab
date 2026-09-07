@@ -2,10 +2,12 @@ import tempfile
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from ebpf_ransom_lab.doctor import (
     DoctorContext,
     Status,
+    _path_exists,
     evaluate_doctor,
     overall_status,
 )
@@ -128,6 +130,12 @@ class DoctorTests(unittest.TestCase):
             self.assertEqual(context.python_version, tuple(sys.version_info[:3]))
             self.assertGreater(context.free_bytes, 0)
             self.assertTrue(context.data_directory_writable)
+
+    def test_unreadable_kernel_path_is_treated_as_unavailable(self):
+        path = Path("/sys/kernel/debug/tracing")
+
+        with patch.object(Path, "exists", side_effect=PermissionError):
+            self.assertFalse(_path_exists(path))
 
     def test_invalid_scope_is_rejected(self):
         with self.assertRaises(ValueError):
