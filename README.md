@@ -18,8 +18,12 @@ execute real ransomware, terminate processes, or block filesystem operations.
 
 ## Current status
 
-Milestone 1 establishes the package, environment checker, frozen upstream
-manifest, automated tests, and Ubuntu/VirtualBox lab instructions. See the
+Milestones 1 and 2 establish the package, environment checker, frozen upstream
+manifests, deterministic research audit, and Ubuntu/VirtualBox lab instructions.
+The audit reconstructs both published integer feature tables exactly and
+confirms the incomplete training-label join (14/32; testing 21/21). The
+corrected published-data experiment remains blocked on label provenance.
+See the [Milestone 2 findings](docs/MILESTONE_2.md),
 [project plan](docs/PROJECT_PLAN.md), [lab setup guide](docs/LAB_SETUP.md), and
 [Milestone 1 checklist](docs/MILESTONE_1.md).
 
@@ -51,6 +55,17 @@ ransomlab reference verify /path/to/ebpfangel
 
 The command fails if the checkout is at a different commit, a required file is
 missing, or a recorded file hash or size has changed.
+
+Audit all published captures, labels, and reconstructed feature values with:
+
+```bash
+ransomlab audit /path/to/ebpfangel --output var/audit
+```
+
+This writes deterministic `audit.json` and `feature_differences.csv` reports.
+It verifies both the frozen Windows and exact Git-blob byte representations.
+A passing audit verifies the documented corpus baseline; paper model metrics
+have not been reproduced. See the Milestone 2 findings for exit codes and tests.
 
 ## Repository layout
 

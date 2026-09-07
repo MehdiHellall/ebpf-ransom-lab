@@ -39,6 +39,10 @@ Create a manifest for each capture and label source, validate label joins, and
 reproduce the original integer feature tables. Keep upstream-compatible and
 corrected experiment metrics separate. Unresolved labels remain quarantined.
 
+Completed: see [Milestone 2 findings](MILESTONE_2.md). Both published integer
+feature tables reconstruct exactly; training labels remain unresolved, blocking
+the corrected published-data experiment without blocking milestone 3.
+
 ### 3. Shared feature engine and replay dashboard
 
 Implement legacy process aggregates and ten-second live windows. Replaying the

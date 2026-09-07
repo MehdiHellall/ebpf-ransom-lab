@@ -14,6 +14,7 @@ from ebpf_ransom_lab.doctor import (
     evaluate_doctor,
     overall_status,
 )
+from ebpf_ransom_lab.audit import audit_checkout, write_report
 from ebpf_ransom_lab.reference import load_manifest, verify_reference
 
 
@@ -35,6 +36,9 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("checkout", type=Path)
     verify.add_argument("--manifest", type=Path)
     verify.add_argument("--json", action="store_true", dest="as_json")
+    audit = subcommands.add_parser('audit', help='audit published research inputs and feature discrepancies')
+    audit.add_argument('checkout', type=Path)
+    audit.add_argument('--output', type=Path, default=Path('var/audit'))
     return parser
 
 
@@ -45,6 +49,17 @@ def run(
     doctor_context: DoctorContext | None = None,
 ) -> int:
     arguments = build_parser().parse_args(argv)
+    if arguments.command == 'audit':
+        try:
+            report = audit_checkout(arguments.checkout)
+            write_report(report, arguments.output, checkout=arguments.checkout)
+        except (OSError, ValueError) as error:
+            print(f'Audit error: {error}', file=stdout)
+            return 2
+        print(f"Audit {'PASS' if report['ok'] else 'FAIL'}: {arguments.output / 'audit.json'}", file=stdout)
+        print(f"Differences: {arguments.output / 'feature_differences.csv'}", file=stdout)
+        print('Paper results: not reproduced. Corrected published experiment: blocked.', file=stdout)
+        return 0 if report['ok'] else 1
     if arguments.command == "doctor":
         context = doctor_context or DoctorContext.from_host(arguments.data_dir)
         checks = evaluate_doctor(context, arguments.scope)

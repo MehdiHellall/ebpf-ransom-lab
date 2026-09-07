@@ -13,6 +13,23 @@ from ebpf_ransom_lab.reference import FileVerification, VerificationReport
 class CliTests(unittest.TestCase):
     COMMIT = "a" * 40
 
+    def test_audit_cli_reports_output_and_exit_status(self):
+        output = io.StringIO()
+        with patch('ebpf_ransom_lab.cli.audit_checkout', return_value={'ok': False}), \
+             patch('ebpf_ransom_lab.cli.write_report') as writer:
+            code = run(['audit', 'reference', '--output', 'var/audit'], stdout=output)
+        self.assertEqual(1, code)
+        writer.assert_called_once()
+        self.assertIn('audit.json', output.getvalue())
+
+    def test_audit_cli_handles_output_failure(self):
+        output = io.StringIO()
+        with patch('ebpf_ransom_lab.cli.audit_checkout', return_value={'ok': True}), \
+             patch('ebpf_ransom_lab.cli.write_report', side_effect=OSError('unwritable')):
+            code = run(['audit', 'reference'], stdout=output)
+        self.assertEqual(2, code)
+        self.assertIn('unwritable', output.getvalue())
+
     def test_doctor_json_returns_success_for_application_scope(self):
         context = DoctorContext(
             system="Windows",

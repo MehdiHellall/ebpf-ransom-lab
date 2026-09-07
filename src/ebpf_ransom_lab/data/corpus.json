@@ -1,0 +1,433 @@
+{
+  "schema_version": 1,
+  "repository": "https://github.com/TomasPhilippart/ebpfangel.git",
+  "commit": "d5e7d3cdebf19474722a97a6238b8f737d16b7d0",
+  "files": [
+    {
+      "path": "data/testing_data.csv",
+      "sha256": "a474b1a3874f958e5702bbd1379854862c1f0864145af87575bb1b6909b7b0db",
+      "size": 130317,
+      "kind": "features",
+      "capture_id": null,
+      "split": "testing",
+      "git_blob_sha256": "9c52d0eb582076363d0d7b0fa508c3895fd6163f4f83a9a0578c09032bdcb014",
+      "git_blob_size": 128978
+    },
+    {
+      "path": "data/testing_labels.csv",
+      "sha256": "870d4aacab16a689325c65df91d38b4916c7fc08fce0a3e0573b2c2198f3354d",
+      "size": 153,
+      "kind": "labels",
+      "capture_id": null,
+      "split": "testing",
+      "git_blob_sha256": "a812a69653aa08ea8a0314d918a4da559ccc19ebea52dd48ff2af32cec01c74f",
+      "git_blob_size": 131
+    },
+    {
+      "path": "data/training_data.csv",
+      "sha256": "1d4270b63726e17c1ac68c485ea518a91b5ec0ac5d77e6121d1676df41b72c3e",
+      "size": 103827,
+      "kind": "features",
+      "capture_id": null,
+      "split": "training",
+      "git_blob_sha256": "dbfb94561c5d001efec1b2687718d8fc7cc14f198156a402a8a38329ba9a7930",
+      "git_blob_size": 102378
+    },
+    {
+      "path": "data/training_labels.csv",
+      "sha256": "014a549b2f09bc080131bc4f1d4a42a31d5f3de44bf1248d9f122cde72cd276b",
+      "size": 231,
+      "kind": "labels",
+      "capture_id": null,
+      "split": "training",
+      "git_blob_sha256": "e3066919ec2ead4fec293ae11f49bdb6dce4a6c8ae21b54d82f7d339dc16cfed",
+      "git_blob_size": 198
+    },
+    {
+      "path": "logs/testing/1_benignlog.csv",
+      "sha256": "fc6f0d2b550eecc7cf406312ad38d131d1d4eed692ebb32e4a79bd3ce392c264",
+      "size": 22323290,
+      "kind": "capture",
+      "capture_id": "logs/testing/1_benignlog.csv",
+      "split": "testing",
+      "git_blob_sha256": "fc6f0d2b550eecc7cf406312ad38d131d1d4eed692ebb32e4a79bd3ce392c264",
+      "git_blob_size": 22323290
+    },
+    {
+      "path": "logs/testing/2_revilog1.csv",
+      "sha256": "785e417f9c1e6d0ca487b4dc11728ccefbea20bed610319c1d04642e62a1edbf",
+      "size": 9194809,
+      "kind": "capture",
+      "capture_id": "logs/testing/2_revilog1.csv",
+      "split": "testing",
+      "git_blob_sha256": "785e417f9c1e6d0ca487b4dc11728ccefbea20bed610319c1d04642e62a1edbf",
+      "git_blob_size": 9194809
+    },
+    {
+      "path": "logs/testing/3_log0.csv",
+      "sha256": "1ded0f545616255a70948529e95fbe9ad776348ce4a5f484a82b117f83630fda",
+      "size": 4762183,
+      "kind": "capture",
+      "capture_id": "logs/testing/3_log0.csv",
+      "split": "testing",
+      "git_blob_sha256": "3f6d73250e086982281c4b96f024935c977684848e6c77b97fa072bd3d56b622",
+      "git_blob_size": 4704699
+    },
+    {
+      "path": "logs/testing/90_Avoslocker2.csv",
+      "sha256": "289fbcafcec44ae93fc789eeb555b7c95cbbc6a670c3d97df69419021bab7c2a",
+      "size": 1455517,
+      "kind": "capture",
+      "capture_id": "logs/testing/90_Avoslocker2.csv",
+      "split": "testing",
+      "git_blob_sha256": "4ca01579b9a0666d45c6d0a1ac73657616889eb2c448f1a34023d011d6680cb8",
+      "git_blob_size": 1438103
+    },
+    {
+      "path": "logs/testing/91_Avoslocker3.csv",
+      "sha256": "66489a3305c8edd448b780209ae8a4093bf355caa2c937fb49f906fdcf08d1b4",
+      "size": 1142325,
+      "kind": "capture",
+      "capture_id": "logs/testing/91_Avoslocker3.csv",
+      "split": "testing",
+      "git_blob_sha256": "e4a7ba519dfe2f70055600356471d198792fc9db3041273e725ccb810f298e44",
+      "git_blob_size": 1129189
+    },
+    {
+      "path": "logs/testing/92_Benign2.csv",
+      "sha256": "e55e7439388581620bfc0f8aec044b6b4586c3d904b61d8e3851675123780963",
+      "size": 7989554,
+      "kind": "capture",
+      "capture_id": "logs/testing/92_Benign2.csv",
+      "split": "testing",
+      "git_blob_sha256": "e55e7439388581620bfc0f8aec044b6b4586c3d904b61d8e3851675123780963",
+      "git_blob_size": 7989554
+    },
+    {
+      "path": "logs/testing/93_BlackMatter.csv",
+      "sha256": "482c21ae7e8c0f8373f35bb70353eadc5b246f84759f496c50f84d4e8949a604",
+      "size": 102216,
+      "kind": "capture",
+      "capture_id": "logs/testing/93_BlackMatter.csv",
+      "split": "testing",
+      "git_blob_sha256": "916bc90d513fd1acaa188730f79d1935128ef5a50e152a1fa1bd4abe0b3b330e",
+      "git_blob_size": 100796
+    },
+    {
+      "path": "logs/testing/94_HelloKitty.csv",
+      "sha256": "bf1ca3969737cb1136c3764ed89aa7b8e008876b0b643054711db45b3d6220cb",
+      "size": 106088,
+      "kind": "capture",
+      "capture_id": "logs/testing/94_HelloKitty.csv",
+      "split": "testing",
+      "git_blob_sha256": "b02e7f8acf59526bf90c45d0aa69768460fb2ef937622e762aae8f3769817946",
+      "git_blob_size": 104543
+    },
+    {
+      "path": "logs/testing/95_IceFire.csv",
+      "sha256": "fa0249087d371ac11b6ba986291db547e21e89b5fa5c7dac2503c668f62c3ce8",
+      "size": 2777664,
+      "kind": "capture",
+      "capture_id": "logs/testing/95_IceFire.csv",
+      "split": "testing",
+      "git_blob_sha256": "def991ffb71758aa31b0882516a926b4994accbeba62441759f89aa3446089b3",
+      "git_blob_size": 2746994
+    },
+    {
+      "path": "logs/testing/96_Monti.csv",
+      "sha256": "f61352242e7f3d4b2ed535bf3b8fc3874f28f81ce6b7d173b2a46f7e86d05f0e",
+      "size": 9261557,
+      "kind": "capture",
+      "capture_id": "logs/testing/96_Monti.csv",
+      "split": "testing",
+      "git_blob_sha256": "5c44979b3d6fbeedf1b5a63687308c91a500bee1001763d35b21ca7e2cb9c2a0",
+      "git_blob_size": 9156679
+    },
+    {
+      "path": "logs/testing/97_REvil2.csv",
+      "sha256": "2b830472df591749a862e38b6e2717152f4f14f10edc39ecbf84c9ea272841e7",
+      "size": 9082079,
+      "kind": "capture",
+      "capture_id": "logs/testing/97_REvil2.csv",
+      "split": "testing",
+      "git_blob_sha256": "e7f404ef892ffc7683ac34ad329db1d774079ad3d174ed164414d6179fcfdd06",
+      "git_blob_size": 8974489
+    },
+    {
+      "path": "logs/training/1_blackmatterlog.csv",
+      "sha256": "c6d616ce6b29fb8648877c035138dbbe8f21e090a50f30b1e8f667b6f7cf84c5",
+      "size": 155481,
+      "kind": "capture",
+      "capture_id": "logs/training/1_blackmatterlog.csv",
+      "split": "training",
+      "git_blob_sha256": "c6d616ce6b29fb8648877c035138dbbe8f21e090a50f30b1e8f667b6f7cf84c5",
+      "git_blob_size": 155481
+    },
+    {
+      "path": "logs/training/2_log2.csv",
+      "sha256": "8509ab50215110d4903f1909da6a4cf1d9b0f1a78da55e36a0f00feea0669da4",
+      "size": 3510998,
+      "kind": "capture",
+      "capture_id": "logs/training/2_log2.csv",
+      "split": "training",
+      "git_blob_sha256": "8509ab50215110d4903f1909da6a4cf1d9b0f1a78da55e36a0f00feea0669da4",
+      "git_blob_size": 3510998
+    },
+    {
+      "path": "logs/training/3_revilog2.csv",
+      "sha256": "e5d96e341f58fb94689fb2dab9ff6882c7fffb1f342a00765abb169ac7bafc1d",
+      "size": 9182716,
+      "kind": "capture",
+      "capture_id": "logs/training/3_revilog2.csv",
+      "split": "training",
+      "git_blob_sha256": "e5d96e341f58fb94689fb2dab9ff6882c7fffb1f342a00765abb169ac7bafc1d",
+      "git_blob_size": 9182716
+    },
+    {
+      "path": "logs/training/4_log.csv",
+      "sha256": "a5b05db30e3006db2353dba093738552c6e8aef54f1ade0c1a8dc7836dc1e2a5",
+      "size": 7381087,
+      "kind": "capture",
+      "capture_id": "logs/training/4_log.csv",
+      "split": "training",
+      "git_blob_sha256": "a5b05db30e3006db2353dba093738552c6e8aef54f1ade0c1a8dc7836dc1e2a5",
+      "git_blob_size": 7381087
+    },
+    {
+      "path": "logs/training/5_log4.csv",
+      "sha256": "fd8521885513fb292fab605afbc871ab1e19e749a1b36151e26c7ab64f772033",
+      "size": 3784022,
+      "kind": "capture",
+      "capture_id": "logs/training/5_log4.csv",
+      "split": "training",
+      "git_blob_sha256": "fd8521885513fb292fab605afbc871ab1e19e749a1b36151e26c7ab64f772033",
+      "git_blob_size": 3784022
+    },
+    {
+      "path": "logs/training/6_revilog.csv",
+      "sha256": "6382a04f557f0870c800f0646a5c44c3a80c3af0bf5026da4e686611d7279bd6",
+      "size": 10045600,
+      "kind": "capture",
+      "capture_id": "logs/training/6_revilog.csv",
+      "split": "training",
+      "git_blob_sha256": "6382a04f557f0870c800f0646a5c44c3a80c3af0bf5026da4e686611d7279bd6",
+      "git_blob_size": 10045600
+    },
+    {
+      "path": "logs/training/7_log3.csv",
+      "sha256": "a498d491ecc62498ac18ab938e11fac51ec605e6c1a9054023e58ecbb9dc9691",
+      "size": 3287734,
+      "kind": "capture",
+      "capture_id": "logs/training/7_log3.csv",
+      "split": "training",
+      "git_blob_sha256": "a498d491ecc62498ac18ab938e11fac51ec605e6c1a9054023e58ecbb9dc9691",
+      "git_blob_size": 3287734
+    },
+    {
+      "path": "logs/training/8_iFire.csv",
+      "sha256": "42b440bec5e9002826d6b6bcd83ef4b4408ac7bf39459a4067fa1b4814b3d4a2",
+      "size": 4762185,
+      "kind": "capture",
+      "capture_id": "logs/training/8_iFire.csv",
+      "split": "training",
+      "git_blob_sha256": "42b440bec5e9002826d6b6bcd83ef4b4408ac7bf39459a4067fa1b4814b3d4a2",
+      "git_blob_size": 4762185
+    },
+    {
+      "path": "logs/training/90_Avoslocker0.csv",
+      "sha256": "faa47326d37e1d2322c8b840655d4494d16966dc935025de3cbeba4fa8e4b463",
+      "size": 1387692,
+      "kind": "capture",
+      "capture_id": "logs/training/90_Avoslocker0.csv",
+      "split": "training",
+      "git_blob_sha256": "7622ab98744e324bffb990855feac45c193f1a2284f9ab8dc04841f71f95ccb3",
+      "git_blob_size": 1371286
+    },
+    {
+      "path": "logs/training/91_Avoslocker1.csv",
+      "sha256": "baeda38c82d3fe38c2811cb1b609bc5a1a51466dc67df1b5cb4f7307c17f3a1c",
+      "size": 1320451,
+      "kind": "capture",
+      "capture_id": "logs/training/91_Avoslocker1.csv",
+      "split": "training",
+      "git_blob_sha256": "d0bc0cb80b224721846c3feb5015491abf8560db2e06ad238a2dd3cdee94b03a",
+      "git_blob_size": 1304887
+    },
+    {
+      "path": "logs/training/92_Benign0.csv",
+      "sha256": "6a7f38eb32287107df51a6f88147406cef6f0ad4d4e773cb159bfd35e96ecffa",
+      "size": 155708,
+      "kind": "capture",
+      "capture_id": "logs/training/92_Benign0.csv",
+      "split": "training",
+      "git_blob_sha256": "6a7f38eb32287107df51a6f88147406cef6f0ad4d4e773cb159bfd35e96ecffa",
+      "git_blob_size": 155708
+    },
+    {
+      "path": "logs/training/93_Benign1.csv",
+      "sha256": "e556bf366f9516ad25449a2808c09b33470e4b02c789cc42eb9b0df13c2581ec",
+      "size": 164151,
+      "kind": "capture",
+      "capture_id": "logs/training/93_Benign1.csv",
+      "split": "training",
+      "git_blob_sha256": "e556bf366f9516ad25449a2808c09b33470e4b02c789cc42eb9b0df13c2581ec",
+      "git_blob_size": 164151
+    },
+    {
+      "path": "logs/training/94_cl0p.csv",
+      "sha256": "23377118eb7ae8102c76f5885b333055a33188dc93ac1854c14421791d89eae4",
+      "size": 285165,
+      "kind": "capture",
+      "capture_id": "logs/training/94_cl0p.csv",
+      "split": "training",
+      "git_blob_sha256": "7a85e2bc56fda475d3e7f158598558e88f7689ff6b9cc35524cbe53b252cc49b",
+      "git_blob_size": 281474
+    },
+    {
+      "path": "logs/training/95_REvil0.csv",
+      "sha256": "35946ae55cce4157e2122b30e85f1e7f61d5e3cff2846ae42c2189e9ca2f0395",
+      "size": 3659860,
+      "kind": "capture",
+      "capture_id": "logs/training/95_REvil0.csv",
+      "split": "training",
+      "git_blob_sha256": "050a5a4d54fb4f18db488e5756720ffbb12fa25c97fcedb0c92bd140d8aab5c8",
+      "git_blob_size": 3617262
+    },
+    {
+      "path": "logs/training/96_REvil1.csv",
+      "sha256": "23394c09455aede088d26f9f41a97fa718f0e2ee8e41662370d3aefaa77f3bf6",
+      "size": 3988754,
+      "kind": "capture",
+      "capture_id": "logs/training/96_REvil1.csv",
+      "split": "training",
+      "git_blob_sha256": "b17bd9b6e8376fd662964a1a8555ec085221821c83ae3d25d9b4935ab8819e6f",
+      "git_blob_size": 3936530
+    }
+  ],
+  "history": {
+    "scope": "All 39 commits reachable from the pinned commit in a non-shallow public repository clone; path history for logs/, the four data CSVs, and machinelearning/dataprep.py.",
+    "reachable_commit_count": 39,
+    "shallow": false,
+    "commits": [
+      {
+        "commit": "5db71f623a911f21fc3fa59228119563e6bd7c8c",
+        "finding": "Introduced 11 captures; no data label tables yet."
+      },
+      {
+        "commit": "d202d1fa51c302f3d856a7499f445f55f2cd5d97",
+        "finding": "Moved two captures from training to testing unchanged; introduced feature and label tables; used unsorted glob capture order.",
+        "training": {
+          "feature_rows": 956,
+          "labels": 43,
+          "exact_label_matches": 10
+        },
+        "testing": {
+          "feature_rows": 507,
+          "labels": 9,
+          "exact_label_matches": 9
+        }
+      },
+      {
+        "commit": "f01755b9b904b34844079d37c2decc31aa9fa135",
+        "finding": "Renamed 11 existing captures with unchanged bytes, added 15 captures, sorted filenames before applying identifier offsets, replaced 15 older training labels with four labels and added 12 testing labels. All 18 currently unmatched training labels were retained.",
+        "training": {
+          "feature_rows": 1448,
+          "labels": 32,
+          "exact_label_matches": 14
+        },
+        "testing": {
+          "feature_rows": 1338,
+          "labels": 21,
+          "exact_label_matches": 21
+        }
+      }
+    ],
+    "last_corpus_change": "f01755b9b904b34844079d37c2decc31aa9fa135",
+    "missing_training_labels": [
+      43763,
+      53102,
+      53103,
+      53104,
+      53105,
+      53106,
+      53107,
+      53108,
+      53109,
+      63832,
+      73110,
+      73111,
+      73112,
+      73113,
+      73114,
+      73115,
+      73116,
+      73117
+    ],
+    "missing_label_status": "unresolved",
+    "evidence": "All 18 unmatched labels are absent from both the supplied training table and the identifier universe reconstructed from capture PID plus sorted capture index times 10000. They already failed exact joins when introduced. Raw PID components recur across captures and splits; no approximate or modulo-PID label repair was applied.",
+    "limitations": [
+      "Reachable published Git history does not reveal uncommitted captures, deleted unreachable objects, author intent, or private annotation records.",
+      "The unsorted historic glob order is not recorded. Capture names and numeric PID resemblance do not establish process-level label provenance.",
+      "Exact PID joins verify membership only; positive-only label files do not establish verified benign labels for all remaining processes."
+    ],
+    "corrected_published_experiment": "blocked_label_provenance"
+  },
+  "reference_files": [
+    {
+      "path": "data/testing_data.csv",
+      "git_blob_sha256": "9c52d0eb582076363d0d7b0fa508c3895fd6163f4f83a9a0578c09032bdcb014",
+      "git_blob_size": 128978
+    },
+    {
+      "path": "data/testing_labels.csv",
+      "git_blob_sha256": "a812a69653aa08ea8a0314d918a4da559ccc19ebea52dd48ff2af32cec01c74f",
+      "git_blob_size": 131
+    },
+    {
+      "path": "data/training_data.csv",
+      "git_blob_sha256": "dbfb94561c5d001efec1b2687718d8fc7cc14f198156a402a8a38329ba9a7930",
+      "git_blob_size": 102378
+    },
+    {
+      "path": "data/training_labels.csv",
+      "git_blob_sha256": "e3066919ec2ead4fec293ae11f49bdb6dce4a6c8ae21b54d82f7d339dc16cfed",
+      "git_blob_size": 198
+    },
+    {
+      "path": "detector/bpf.c",
+      "git_blob_sha256": "bd38d48ca8b72c361c2be9459a4f1e906924204bc1253b3d2b7e4079d035b7d4",
+      "git_blob_size": 7259
+    },
+    {
+      "path": "detector/bpf.h",
+      "git_blob_sha256": "7af6aaa4d27c777fa116a657d5a4d46daea622d31b9eda37e9c2d495319d2954",
+      "git_blob_size": 2877
+    },
+    {
+      "path": "detector/detector.py",
+      "git_blob_sha256": "e7d9b05a573125f9d2c1f97311703841850b739cdf6c74d26efb026d71a327dd",
+      "git_blob_size": 5461
+    },
+    {
+      "path": "docs/Ransomware_Detection_using_Machine_Learning_with_eBPF.pdf",
+      "git_blob_sha256": "6243a9039a4853fcd9753a73d6c38c965d39f529e9815a9afbecd1c80d028edd",
+      "git_blob_size": 1127969
+    },
+    {
+      "path": "machinelearning/dataprep.py",
+      "git_blob_sha256": "fefb5ed9376f549f998909def390b4527890de0e1ff8bded1d7a5f0af318a834",
+      "git_blob_size": 4118
+    },
+    {
+      "path": "machinelearning/model.py",
+      "git_blob_sha256": "12ce2f40dd326d5ce46a8667fdcb2572fc9da229181045381c1617e5f7162e78",
+      "git_blob_size": 7251
+    }
+  ],
+  "byte_representations": {
+    "sha256_and_size": "Exact frozen Windows checkout bytes, retained to preserve Milestone 1 evidence.",
+    "git_blob_sha256_and_size": "Exact file object bytes from the pinned Git commit, allowing Linux clones without newline conversion.",
+    "csv_newline_conversions": 17,
+    "policy": "Accept only an exact hash and size pair for one recorded representation. Never normalize arbitrary input before verification."
+  }
+}
