@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.coverage
+coverage.xml
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# Local research inputs and generated outputs
+tmp/
+var/
+artifacts/
+reports/generated/
+*.joblib
+*.onnx
+
+# Virtual machines and installers
+*.iso
+*.ova
+*.ovf
+*.vdi
+*.vbox
+*.vbox-prev
+*.vmdk
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

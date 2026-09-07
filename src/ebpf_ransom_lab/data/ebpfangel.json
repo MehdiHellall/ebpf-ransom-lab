@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "repository": "https://github.com/TomasPhilippart/ebpfangel.git",
+  "commit": "d5e7d3cdebf19474722a97a6238b8f737d16b7d0",
+  "license": "MIT",
+  "files": [
+    {"path": "detector/bpf.c", "sha256": "9101476e3a11f3c2120e7ba77c5eb1e64da308fef41694ac181cf01d913a2295", "size": 7469},
+    {"path": "detector/bpf.h", "sha256": "16e45c9b00381678e64b0bdb7077d147c7706570d85675b22d08e2f1387dd35a", "size": 2964},
+    {"path": "detector/detector.py", "sha256": "5de4c9a04e4a5a920cb89de28bd0b17c81895a65526d57105d76dff3a61f460d", "size": 5634},
+    {"path": "machinelearning/dataprep.py", "sha256": "b491836c90ab19812b5ea93b55b8b2c7eda0af4364fc744570e13b471e00eeb8", "size": 4229},
+    {"path": "machinelearning/model.py", "sha256": "b5ec87a1291602ce166dc8a50deb768281b70921b28f638471ad7d910ec1ee4b", "size": 7460},
+    {"path": "data/training_data.csv", "sha256": "1d4270b63726e17c1ac68c485ea518a91b5ec0ac5d77e6121d1676df41b72c3e", "size": 103827},
+    {"path": "data/training_labels.csv", "sha256": "014a549b2f09bc080131bc4f1d4a42a31d5f3de44bf1248d9f122cde72cd276b", "size": 231},
+    {"path": "data/testing_data.csv", "sha256": "a474b1a3874f958e5702bbd1379854862c1f0864145af87575bb1b6909b7b0db", "size": 130317},
+    {"path": "data/testing_labels.csv", "sha256": "870d4aacab16a689325c65df91d38b4916c7fc08fce0a3e0573b2c2198f3354d", "size": 153},
+    {"path": "docs/Ransomware_Detection_using_Machine_Learning_with_eBPF.pdf", "sha256": "6243a9039a4853fcd9753a73d6c38c965d39f529e9815a9afbecd1c80d028edd", "size": 1127969}
+  ]
+}
