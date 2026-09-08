@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>eBPF Ransom Lab</title>
+  <link rel="icon" href="/static/logo.png">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header>
+    <img src="/static/logo.png" alt="Pixel-art telemetry shield logo" width="72" height="72">
+    <div><p class="eyebrow">LOCAL RESEARCH CONSOLE</p><h1>eBPF Ransom Lab</h1></div>
+    <span id="connection" class="status disconnected">Disconnected</span>
+  </header>
+  <main>
+    <section class="cards" aria-label="Collector status">
+      <article><span>Event rate</span><strong id="event-rate">0.0/s</strong></article>
+      <article><span>Dropped events</span><strong id="lost-events">0</strong></article>
+      <article><span>Recording</span><strong id="recording">Off</strong></article>
+      <article><span>Active alerts</span><strong id="active-alerts">0</strong></article>
+    </section>
+    <section class="panel"><div class="panel-title"><h2>Recent alerts</h2><span>score, not probability</span></div>
+      <div class="table-wrap"><table><thead><tr><th>Run</th><th>TGID</th><th>Score</th><th>Evidence</th></tr></thead><tbody id="alerts"><tr><td colspan="4">No alerts recorded.</td></tr></tbody></table></div>
+    </section>
+    <section class="panel"><div class="panel-title"><h2>Observed processes</h2><span>boot + TGID + start time</span></div>
+      <div class="table-wrap"><table><thead><tr><th>Run</th><th>TGID</th><th>Windows</th><th>Latest window</th></tr></thead><tbody id="processes"><tr><td colspan="4">No process windows yet.</td></tr></tbody></table></div>
+    </section>
+  </main>
+  <footer>Alert-only prototype · incomplete telemetry is never classified</footer>
+</body>
+</html>

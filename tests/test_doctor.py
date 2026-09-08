@@ -45,7 +45,7 @@ class DoctorTests(unittest.TestCase):
 
     def test_application_scope_rejects_old_python(self):
         checks = evaluate_doctor(
-            self.make_context(python_version=(3, 10, 14)), "app"
+            self.make_context(python_version=(3, 11, 14)), "app"
         )
 
         python_check = next(check for check in checks if check.name == "python")

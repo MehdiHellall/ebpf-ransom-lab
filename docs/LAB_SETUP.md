@@ -5,21 +5,11 @@ Do not import or execute real malware in this version of the project.
 
 ## Host preflight
 
-The planned VM profile is 4 virtual CPUs, 8 GB RAM, and a dynamically allocated
-40 GB disk. It assumes a host with at least 16 GB RAM and roughly 10 GB free
-memory before the VM starts.
-
-The host inspected on 2026-09-06 has VirtualBox 7.2.12, 12 logical CPUs, 12,064
-MB total RAM, and only about 1,761 MB available at inspection time. Starting an
-8 GB VM in that state is unsafe for host stability. Close memory-heavy programs
-and recheck. If the host cannot provide enough free memory, use the fallback lab
-profile of 2 virtual CPUs and 4 GB RAM after accepting slower model training.
-
-Keep at least 25 GB of real disk space free for the ISO, dynamically growing VM,
-snapshots, and captures. The project drive had about 14.2 GB free during the
-preflight, so storage must also be freed before creating the planned VM.
-VirtualBox reported no existing VM for this project, and no Ubuntu 24.04 ISO was
-found in the Downloads folder during the preflight.
+The preferred VM profile is 4 virtual CPUs, 8 GB RAM, and a dynamically
+allocated 40 GB disk. Before creating it, confirm that the host has at least
+10 GB free RAM and 25 GB free disk space for the ISO, VM, snapshots, and
+captures. If that is not available, use the fallback profile of 2 virtual CPUs
+and 4 GB RAM, accepting slower model training.
 
 ## Create the VM
 
@@ -48,7 +38,7 @@ found in the Downloads folder during the preflight.
 
 8. Confirm that `var/lab_versions.txt` exists and records the kernel, Python,
    pip, BCC, and Linux-header package versions from the VM.
-9. Shut down the VM and create a snapshot named `clean-lab-m1`.
+9. Shut down the VM and create a snapshot named `clean-training-lab`.
 
 ## Localhost-only SSH access
 
@@ -91,8 +81,16 @@ loading, or workload runner as root.
 `ransomlab doctor --scope collector` verifies Linux, root privileges, BCC Python
 bindings, kernel BTF, matching kernel headers, BPF ring-buffer support, and the
 syscall tracepoints used by the first collector. A failed check must be fixed
-before collection begins. Milestone 4 adds the event-delivery smoke test; these
-static checks do not claim that events have already reached a consumer.
+before collection begins. Then make and replay a short smoke capture before
+recording experiment data:
+
+```bash
+sudo .venv/bin/ransomlab collect --run-id collector-smoke --duration-seconds 10 > var/collector-smoke.jsonl
+.venv/bin/ransomlab features var/collector-smoke.jsonl --output var/collector-smoke-features.jsonl
+```
+
+Keep the raw capture and feature output only when lifecycle identity and health
+records are present and no loss is reported.
 
 Ubuntu's BCC package may lag upstream, but the packaged version is suitable for
 this pinned prototype if the doctor and smoke test pass. Record the kernel, BCC,

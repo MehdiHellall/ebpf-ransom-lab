@@ -70,6 +70,20 @@ Connect collection through inference to consolidated alerts. Report recall,
 precision, F1, MCC, false alerts per benign host-hour, detection delay, files
 changed before alert, event loss, CPU and memory use, and workload slowdown.
 
+## Current implementation boundary
+
+Milestones 3–5 are implemented as a portable, training-ready pipeline:
+versioned normalized recordings, a shared ten-second feature engine, local
+dashboard and replay path, BCC collector source and ABI tests, bounded
+controlled workloads, manifest-bound labels, fixed capture splits,
+capture-grouped model selection, and checksummed safe artifacts.
+
+The remaining acceptance work must happen on the pinned Ubuntu VM: compile and
+attach BCC, exercise the collector under syscall/loss/PID-reuse stress, make
+the planned 40 captures, and perform the single held-out evaluation. Until
+then, the project reports implementation readiness rather than experimental
+performance.
+
 ## Completion criteria
 
 Version one is complete when a fresh VM can follow the setup guide, reproduce

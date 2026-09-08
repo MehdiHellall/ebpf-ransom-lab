@@ -1,87 +1,117 @@
+<p align="center">
+  <img src="src/ebpf_ransom_lab/static/logo.png" width="128" alt="Pixel-art telemetry shield logo">
+</p>
+
 # eBPF Ransom Lab
 
-This project reproduces and corrects the research behind
-[ebpfangel](https://github.com/TomasPhilippart/ebpfangel), then builds an
-alert-only Linux prototype that detects suspicious file-operation behavior.
-It is a research lab and demonstration, not a production anti-ransomware
-product.
+A reproducible, alert-only research prototype for detecting suspicious Linux
+file-operation behavior. It keeps two things deliberately separate: auditing
+the published `ebpfangel` experiment and building a controlled, safe live
+demonstration. It is not a production anti-ransomware product.
 
-The project keeps two evidence tracks separate:
+## Status
 
-- **Upstream-compatible:** explain and replay the published behavior, including
-  discrepancies.
-- **Corrected prototype:** use validated labels, consistent feature generation,
-  controlled workloads, and the same feature path for offline and live data.
+Milestones 1–2 are complete and committed. Milestones 3–5 are now
+**training-ready**: portable replay, dashboard, collector protocol/ABI,
+bounded workloads, deterministic splits, grouped training, model artifacts,
+and reports are implemented and covered by portable tests.
 
-Version one uses published traces and bounded synthetic workloads. It does not
-execute real ransomware, terminate processes, or block filesystem operations.
+The Ubuntu-VM gates remain intentionally open: BCC compile/attach, syscall
+stress tests, the 40 real sixty-second captures, and the final held-out model
+evaluation must be run in the pinned Linux VM. This repository does not claim
+those measurements have happened on this Windows host.
 
-## Current status
+| Track | State |
+|---|---|
+| Published-data audit | Complete; corrected experiment blocked by incomplete label provenance |
+| Replay → dashboard | Ready on any supported host |
+| BCC collector | Implemented and portable-contract tested; requires Ubuntu VM validation |
+| Controlled workloads → model | Ready; requires real VM captures before fitting a result worth reporting |
 
-Milestones 1 and 2 establish the package, environment checker, frozen upstream
-manifests, deterministic research audit, and Ubuntu/VirtualBox lab instructions.
-The audit reconstructs both published integer feature tables exactly and
-confirms the incomplete training-label join (14/32; testing 21/21). The
-corrected published-data experiment remains blocked on label provenance.
-See the [Milestone 2 findings](docs/MILESTONE_2.md),
-[project plan](docs/PROJECT_PLAN.md), [lab setup guide](docs/LAB_SETUP.md), and
-[Milestone 1 checklist](docs/MILESTONE_1.md).
+## Quick start: replay the dashboard
 
-## Quick start
-
-Python 3.11 or newer is required. This Windows host did not have a user Python
-installation during the initial preflight, so install Python 3.12 first and
-enable its `Add python.exe to PATH` option. Then, from the repository root:
+Python 3.12 is required.
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python -m pip install -e .
-.\.venv\Scripts\ransomlab doctor --scope app
-.\.venv\Scripts\python -m unittest discover -s tests -v
+.\.venv\Scripts\python -m pip install -r requirements.lock
+.\.venv\Scripts\python -m pip install --no-deps -e .
+.\.venv\Scripts\ransomlab replay examples\replay-demo.jsonl --capture-start-ns 0 --capture-end-ns 10000000000 --threshold 0.2 --database var\demo.sqlite
+.\.venv\Scripts\ransomlab serve --database var\demo.sqlite
 ```
 
-On Linux, verify collector prerequisites after completing the lab setup:
+Open <http://127.0.0.1:8000>. The bundled recording is intentionally tiny and
+uses a low rule threshold only to demonstrate the alert path. Scores are not
+probabilities.
 
-```bash
-sudo .venv/bin/ransomlab doctor --scope collector
+Run the portable quality gate with:
+
+```powershell
+.\.venv\Scripts\python -m coverage run -m unittest discover -s tests -v
+.\.venv\Scripts\python -m coverage report
 ```
 
-To verify a local clone of the inspiration repository against the pinned
-evidence manifest:
+## Training workflow
 
-```bash
-ransomlab reference verify /path/to/ebpfangel
-```
-
-The command fails if the checkout is at a different commit, a required file is
-missing, or a recorded file hash or size has changed.
-
-Audit all published captures, labels, and reconstructed feature values with:
-
-```bash
-ransomlab audit /path/to/ebpfangel --output var/audit
-```
-
-This writes deterministic `audit.json` and `feature_differences.csv` reports.
-It verifies both the frozen Windows and exact Git-blob byte representations.
-A passing audit verifies the documented corpus baseline; paper model metrics
-have not been reproduced. See the Milestone 2 findings for exit codes and tests.
-
-## Repository layout
+The workflow is designed to prevent the usual research leaks: the split is
+fixed before training, capture groups never cross folds, background activity is
+unlabeled, and partial/loss-affected windows are rejected.
 
 ```text
-src/ebpf_ransom_lab/   application and CLI code
-tests/                 portable automated tests
-docs/                  project and lab documentation
-references/            upstream provenance and attribution
-scripts/               repeatable environment setup helpers
+bounded workload + 60-second collector capture
+  → normalized JSONL
+  → fixed 10-second feature windows
+  → manifest-bound labeled dataset rows
+  → grouped CV + validation selection
+  → safe local artifact + one held-out test evaluation
 ```
 
-Generated captures, VM disks, model artifacts, dependency-version captures, and
-temporary audit material are ignored by Git.
+Create the immutable 40-capture plan first:
 
-## Safety boundary
+```powershell
+ransomlab workload plan --output var\controlled-workloads.json
+```
 
-Only the future eBPF collector will run as root. Feature processing, model
-training, storage, and the dashboard run as an ordinary user. Controlled
-workloads will be limited to newly created disposable directories.
+The fixed seeds are `11, 23, 37` for training, `41` for validation, and `53`
+for final test, across five benign and three suspicious-behavior simulations.
+See [the training guide](docs/TRAINING_GUIDE.md) for the VM commands and
+manifest-to-dataset sequence.
+
+## Safety boundaries
+
+- No malware is downloaded, executed, or needed.
+- Every workload uses a fresh generated child directory; symlinks, traversal,
+  arbitrary target directories, and resource-limit bypasses are rejected.
+- Only `ransomlab collect` runs as root, on Linux. Its JSONL output is consumed
+  by an ordinary-user service.
+- The dashboard binds only to `127.0.0.1`, contains no CDN dependency, and
+  renders telemetry as text rather than HTML.
+- The published corpus remains frozen; its unresolved labels are never silently
+  treated as benign.
+
+## Key commands
+
+| Command | Purpose |
+|---|---|
+| `ransomlab doctor` | Check app or collector prerequisites |
+| `ransomlab audit <checkout>` | Reproduce the deterministic upstream-input audit |
+| `ransomlab features <recording>` | Create fixed live-window feature records |
+| `ransomlab replay <recording>` | Populate SQLite with rule predictions and alerts |
+| `ransomlab serve` | Run the localhost dashboard; optionally consume a JSONL pipe |
+| `ransomlab collect` | Run the privileged BCC sensor in the Ubuntu VM |
+| `ransomlab workload plan/run` | Plan or safely execute a controlled scenario |
+| `ransomlab dataset build` | Label only manifest-tracked workload processes |
+| `ransomlab train/evaluate/report` | Train, assess, and export a reproducible local artifact |
+
+## Documentation
+
+- [Project plan](docs/PROJECT_PLAN.md)
+- [Training and VM capture guide](docs/TRAINING_GUIDE.md)
+- [Ubuntu / VirtualBox setup](docs/LAB_SETUP.md)
+- [Published-data audit findings](docs/MILESTONE_2.md)
+- [Frozen upstream attribution](references/README.md) and
+  [third-party notices](THIRD_PARTY_NOTICES.md)
+
+Generated captures, model artifacts, reports, and VM images are ignored by
+Git. Keep the Linux checkout on the VM filesystem rather than a Windows shared
+folder.

@@ -21,7 +21,8 @@ sudo apt-get install -y \
   python3-venv
 
 python3 -m venv --system-site-packages .venv
-.venv/bin/python -m pip install --no-build-isolation -e .
+.venv/bin/python -m pip install --no-build-isolation -r requirements.lock
+.venv/bin/python -m pip install --no-build-isolation --no-deps -e .
 
 mkdir -p var
 {

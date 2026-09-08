@@ -6,6 +6,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ebpf_ransom_lab.cli import run
+from ebpf_ransom_lab.contracts import Event, Heartbeat, ProcessIdentity
+from ebpf_ransom_lab.features import WINDOW_NS
+from ebpf_ransom_lab.recording import read_jsonl, write_jsonl
 from ebpf_ransom_lab.doctor import DoctorContext
 from ebpf_ransom_lab.reference import FileVerification, VerificationReport
 
@@ -128,6 +131,103 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(0, exit_code)
         self.assertTrue(json.loads(output.getvalue())["ok"])
+
+    def test_features_and_replay_drive_the_portable_dashboard_database(self):
+        identity = ProcessIdentity("boot", 9, 10)
+        records = (
+            Event("demo", 1, 0, identity, 9, "C"),
+            Event("demo", 2, 1, identity, 9, "D"),
+            Heartbeat("demo", 3, WINDOW_NS),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            input_path = root / "recording.jsonl"
+            features_path = root / "features.jsonl"
+            database = root / "runs.sqlite"
+            write_jsonl(input_path, records)
+            output = io.StringIO()
+
+            self.assertEqual(0, run([
+                "features", str(input_path), "--capture-start-ns", "0",
+                "--capture-end-ns", str(WINDOW_NS), "--output", str(features_path),
+            ], stdout=output))
+            self.assertEqual(1, len(read_jsonl(features_path)))
+            self.assertEqual(0, run([
+                "replay", str(input_path), "--capture-start-ns", "0",
+                "--capture-end-ns", str(WINDOW_NS), "--database", str(database),
+            ], stdout=output))
+            self.assertTrue(database.exists())
+            self.assertIn("Replay complete", output.getvalue())
+
+    def test_workload_plan_writes_the_fixed_forty_run_manifest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_path = Path(directory) / "experiment.json"
+            output = io.StringIO()
+            self.assertEqual(0, run([
+                "workload", "plan", "--output", str(output_path),
+            ], stdout=output))
+            self.assertEqual(40, len(json.loads(output_path.read_text(encoding="utf-8"))["runs"]))
+
+    def test_dataset_command_rejects_untracked_background_by_construction(self):
+        identity = ProcessIdentity("boot", 9, 10)
+        records = (
+            Event("controlled-copying-seed-11", 1, 0, identity, 9, "C"),
+            Event("controlled-copying-seed-11", 2, 1, identity, 9, "D"),
+            Heartbeat("controlled-copying-seed-11", 3, WINDOW_NS),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recording = root / "recording.jsonl"
+            features = root / "features.jsonl"
+            manifest = root / "run-manifest.json"
+            dataset = root / "dataset.jsonl"
+            write_jsonl(recording, records)
+            manifest.write_text(json.dumps({
+                "schema_version": 1, "run_id": "controlled-copying-seed-11",
+                "split": "training", "behavior_label": "benign",
+                "label_provenance": "controlled_workload", "background_activity": "unlabeled",
+                "tracked_processes": [{"boot_id": "boot", "tgid": 9, "start_time_ns": 10}],
+            }), encoding="utf-8")
+            output = io.StringIO()
+            self.assertEqual(0, run([
+                "features", str(recording), "--capture-start-ns", "0",
+                "--capture-end-ns", str(WINDOW_NS), "--output", str(features),
+            ], stdout=output))
+            self.assertEqual(0, run([
+                "dataset", "build", str(features), str(manifest), "--output", str(dataset),
+            ], stdout=output))
+            row = json.loads(dataset.read_text(encoding="utf-8"))
+            self.assertEqual(0, row["label"])
+            self.assertEqual("training", row["split"])
+
+    def test_collect_command_is_present_and_fails_closed_without_linux_root(self):
+        output = io.StringIO()
+        with patch("ebpf_ransom_lab.cli.os.name", "nt"):
+            self.assertEqual(2, run(["collect", "--run-id", "demo"], stdout=output))
+        self.assertEqual("", output.getvalue())
+
+    def test_train_evaluate_and_report_are_exposed_as_safe_commands(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset = root / "dataset.jsonl"
+            dataset.write_text("{}\n", encoding="utf-8")
+            output = io.StringIO()
+            with patch("ebpf_ransom_lab.cli.load_dataset", return_value=(object(),)), \
+                 patch("ebpf_ransom_lab.cli.train_and_select") as trainer, \
+                 patch("ebpf_ransom_lab.cli.save_artifact") as saver:
+                trainer.return_value = type("Result", (), {
+                    "selected_name": "rule", "threshold": 4.0,
+                    "test_metrics": {"f1": 1.0},
+                })()
+                self.assertEqual(0, run(["train", str(dataset), "--output", str(root / "artifact")], stdout=output))
+                saver.assert_called_once()
+
+            with patch("ebpf_ransom_lab.cli.load_artifact") as loader, \
+                 patch("ebpf_ransom_lab.cli.load_dataset", return_value=()), \
+                 patch("ebpf_ransom_lab.cli.evaluate_loaded_artifact", return_value={"f1": 1.0}):
+                loader.return_value = object()
+                self.assertEqual(0, run(["evaluate", str(root / "artifact"), str(dataset)], stdout=output))
+            self.assertIn("f1", output.getvalue())
 
 
 if __name__ == "__main__":

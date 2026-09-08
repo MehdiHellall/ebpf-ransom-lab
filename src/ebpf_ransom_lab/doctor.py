@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Iterable
 
 
-MINIMUM_PYTHON = (3, 11)
+MINIMUM_PYTHON = (3, 12)
 MINIMUM_FREE_BYTES = 5 * 1024**3
 MINIMUM_RING_BUFFER_KERNEL = (5, 8)
 TRACEPOINT_NAMES = (
