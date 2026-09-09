@@ -18,8 +18,15 @@ from ebpf_ransom_lab.doctor import (
     evaluate_doctor,
     overall_status,
 )
+from ebpf_ransom_lab.collector.runtime import MAX_QUEUE_LIMIT, RUN_ID_PATTERN
 from ebpf_ransom_lab.audit import audit_checkout, write_report
-from ebpf_ransom_lab.artifacts import load_artifact, save_artifact
+from ebpf_ransom_lab.artifacts import (
+    load_artifact,
+    load_test_evaluation,
+    save_artifact,
+    save_test_evaluation,
+)
+from ebpf_ransom_lab.capture import validate_capture_file, write_capture_acceptance
 from ebpf_ransom_lab.detection import RuleScorer
 from ebpf_ransom_lab.dataset import (
     build_labeled_windows,
@@ -41,10 +48,11 @@ from ebpf_ransom_lab.workloads import (
     RUN_SEEDS,
     WorkloadLimits,
     build_experiment_manifest,
+    ensure_unprivileged_workload,
     run_workload,
     workload_run_manifest,
 )
-from ebpf_ransom_lab.contracts import RunStart, record_to_dict
+from ebpf_ransom_lab.contracts import RunEnd, RunStart, record_to_dict
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -117,6 +125,18 @@ def build_parser() -> argparse.ArgumentParser:
     workload_run.add_argument("--hold-seconds", type=float, default=0.0)
     workload_run.add_argument("--manifest", type=Path)
 
+    capture = subcommands.add_parser(
+        "capture", help="validate raw controlled-capture evidence"
+    )
+    capture_commands = capture.add_subparsers(dest="capture_command", required=True)
+    capture_validate = capture_commands.add_parser(
+        "validate", help="accept a complete, lossless capture bound to the frozen plan"
+    )
+    capture_validate.add_argument("recording", type=Path)
+    capture_validate.add_argument("manifest", type=Path)
+    capture_validate.add_argument("--plan", type=Path, required=True)
+    capture_validate.add_argument("--output", type=Path, required=True)
+
     dataset = subcommands.add_parser(
         "dataset", help="build label-safe training rows from one controlled capture"
     )
@@ -124,6 +144,8 @@ def build_parser() -> argparse.ArgumentParser:
     dataset_build = dataset_commands.add_parser("build", help="join windows to an actual workload manifest")
     dataset_build.add_argument("features", type=Path)
     dataset_build.add_argument("manifest", type=Path)
+    dataset_build.add_argument("--capture", type=Path, required=True)
+    dataset_build.add_argument("--plan", type=Path, required=True)
     dataset_build.add_argument("--output", type=Path, required=True)
 
     train = subcommands.add_parser("train", help="train and select a controlled-workload model")
@@ -134,7 +156,6 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate = subcommands.add_parser("evaluate", help="evaluate a saved artifact without refitting")
     evaluate.add_argument("artifact", type=Path)
     evaluate.add_argument("dataset", type=Path)
-    evaluate.add_argument("--split", choices=("training", "validation", "test"), default="test")
 
     report = subcommands.add_parser("report", help="export the reproducibility section of a model artifact")
     report.add_argument("artifact", type=Path)
@@ -159,6 +180,8 @@ def run(
         return _collect(arguments, stdout)
     if arguments.command == "workload":
         return _workload(arguments, stdout)
+    if arguments.command == "capture":
+        return _capture(arguments, stdout)
     if arguments.command == "dataset":
         return _dataset(arguments, stdout)
     if arguments.command == "train":
@@ -211,6 +234,8 @@ def run(
 
 def _features(arguments: argparse.Namespace, stdout: TextIO) -> int:
     try:
+        if arguments.output.exists():
+            raise FileExistsError(f"refusing to overwrite {arguments.output}")
         windows = replay_records(
             read_jsonl(arguments.recording),
             capture_start_ns=arguments.capture_start_ns,
@@ -297,6 +322,24 @@ def _serve(arguments: argparse.Namespace, stdout: TextIO) -> int:
 
 def _collect(arguments: argparse.Namespace, stdout: TextIO) -> int:
     """Run the privileged BCC sensor while keeping stdout pipe-safe JSONL."""
+    if RUN_ID_PATTERN.fullmatch(arguments.run_id) is None:
+        print(
+            "Collect error: run-id must be 1-128 characters using letters, "
+            "numbers, dots, underscores, colons, or dashes",
+            file=sys.stderr,
+        )
+        return 2
+    if (
+        not isinstance(arguments.queue_limit, int)
+        or isinstance(arguments.queue_limit, bool)
+        or arguments.queue_limit < 1
+        or arguments.queue_limit > MAX_QUEUE_LIMIT
+    ):
+        print(
+            f"Collect error: queue limit must be between 1 and {MAX_QUEUE_LIMIT}",
+            file=sys.stderr,
+        )
+        return 2
     if os.name != "posix" or not hasattr(os, "geteuid") or os.geteuid() != 0:
         print("Collect error: live collection requires Linux root privileges", file=sys.stderr)
         return 2
@@ -320,11 +363,12 @@ def _collect(arguments: argparse.Namespace, stdout: TextIO) -> int:
         print(f"Collect error: {error}", file=sys.stderr)
         return 2
 
-    deadline = time.monotonic() + arguments.duration_seconds
+    capture_start_ns = time.monotonic_ns()
+    deadline_ns = capture_start_ns + int(arguments.duration_seconds * 1_000_000_000)
     next_heartbeat = time.monotonic()
     try:
-        _emit_record(RunStart(arguments.run_id, time.monotonic_ns(), source="live"), stdout)
-        while time.monotonic() < deadline:
+        _emit_record(RunStart(arguments.run_id, capture_start_ns, source="live"), stdout)
+        while time.monotonic_ns() < deadline_ns:
             collector.poll(timeout_ms=min(arguments.heartbeat_ms, 250))
             for event in consumer.drain():
                 record = (
@@ -341,12 +385,31 @@ def _collect(arguments: argparse.Namespace, stdout: TextIO) -> int:
                 )
                 _emit_record(heartbeat, stdout)
                 next_heartbeat = now + arguments.heartbeat_ms / 1000.0
-        health = collector.health(monotonic_ns=time.monotonic_ns())
+        collector.poll(timeout_ms=0)
+        for event in consumer.drain():
+            record = (
+                event.to_contract_event()
+                if event.event_type == "syscall"
+                else ProcessExitNotice.from_event(event).to_contract_record()
+            )
+            _emit_record(record, stdout)
+        capture_end_ns = max(time.monotonic_ns(), deadline_ns)
+        health = collector.health(monotonic_ns=capture_end_ns)
         _emit_record(
             adapter.health_to_heartbeat(health, collector_sequence=consumer.claim_sequence()),
             stdout,
         )
-    except (RuntimeError, ValueError) as error:
+        _emit_record(
+            RunEnd(
+                arguments.run_id,
+                consumer.claim_sequence(),
+                capture_end_ns,
+                status="complete",
+                total_lost_events=health.counters.total,
+            ),
+            stdout,
+        )
+    except (OSError, RuntimeError, ValueError) as error:
         print(f"Collect error: {error}", file=sys.stderr)
         return 2
     finally:
@@ -366,6 +429,7 @@ def _workload(arguments: argparse.Namespace, stdout: TextIO) -> int:
             )
             print(f"Controlled workload plan: {arguments.output}", file=stdout)
             return 0
+        ensure_unprivileged_workload()
         arguments.root.mkdir(parents=True, exist_ok=True)
         result = run_workload(
             arguments.scenario, arguments.seed, arguments.root,
@@ -387,12 +451,33 @@ def _workload(arguments: argparse.Namespace, stdout: TextIO) -> int:
     return 0
 
 
+def _capture(arguments: argparse.Namespace, stdout: TextIO) -> int:
+    try:
+        acceptance = validate_capture_file(
+            arguments.recording, arguments.manifest, arguments.plan
+        )
+        write_capture_acceptance(arguments.output, acceptance)
+    except (OSError, RuntimeError, ValueError, FileExistsError) as error:
+        print(f"Capture validation error: {error}", file=stdout)
+        return 2
+    print(
+        f"Capture accepted: {acceptance.run_id} -> {arguments.output}", file=stdout
+    )
+    return 0
+
+
 def _dataset(arguments: argparse.Namespace, stdout: TextIO) -> int:
     try:
+        acceptance = validate_capture_file(
+            arguments.capture, arguments.manifest, arguments.plan
+        )
         windows = read_feature_windows(arguments.features)
+        expected_windows = replay_records(read_jsonl(arguments.capture))
+        if windows != expected_windows:
+            raise ValueError("feature input does not exactly match the accepted raw capture")
         manifest = load_workload_manifest(arguments.manifest)
         rows = build_labeled_windows(
-            windows, manifest, capture_hash=_sha256_file(arguments.features)
+            windows, manifest, capture_hash=acceptance.raw_sha256
         )
         if not rows:
             raise ValueError("no complete windows matched the tracked workload process")
@@ -415,7 +500,7 @@ def _train(arguments: argparse.Namespace, stdout: TextIO) -> int:
         return 2
     print(json.dumps({
         "artifact": str(arguments.output), "model": result.selected_name,
-        "threshold": result.threshold, "test_metrics": dict(result.test_metrics),
+        "threshold": result.threshold, "status": "selected_not_tested",
     }, sort_keys=True), file=stdout)
     return 0
 
@@ -424,12 +509,19 @@ def _evaluate(arguments: argparse.Namespace, stdout: TextIO) -> int:
     try:
         artifact = load_artifact(arguments.artifact)
         with arguments.dataset.open(encoding="utf-8") as stream:
-            samples = tuple(sample for sample in load_dataset(stream) if sample.split == arguments.split)
+            samples = load_dataset(stream)
+        if any(sample.split != "test" for sample in samples):
+            raise ValueError("held-out evaluation input must contain only test rows")
         metrics = evaluate_loaded_artifact(artifact, samples)
-    except (OSError, RuntimeError, ValueError) as error:
+        save_test_evaluation(
+            arguments.artifact,
+            dataset_sha256=_sha256_file(arguments.dataset),
+            metrics=metrics,
+        )
+    except (OSError, RuntimeError, ValueError, FileExistsError) as error:
         print(f"Evaluate error: {error}", file=stdout)
         return 2
-    print(json.dumps({"split": arguments.split, "metrics": metrics}, sort_keys=True), file=stdout)
+    print(json.dumps({"split": "test", "metrics": metrics}, sort_keys=True), file=stdout)
     return 0
 
 
@@ -441,13 +533,19 @@ def _report(arguments: argparse.Namespace, stdout: TextIO) -> int:
         manifest = json.loads(source.read_text(encoding="utf-8"))
         if arguments.output.exists():
             raise FileExistsError(f"refusing to overwrite {arguments.output}")
+        evaluation = load_test_evaluation(arguments.artifact)
+        sections = dict(manifest["report_sections"])
+        controlled = dict(sections["controlled_workloads"])
+        controlled.update({"status": "evaluated", "test": evaluation["metrics"]})
+        sections["controlled_workloads"] = controlled
         payload = {
             "artifact_version": manifest["artifact_version"],
             "model": manifest["model_name"],
-            "training_manifest_hash": manifest["training_manifest_hash"],
+            "selection_manifest_hash": manifest["selection_manifest_hash"],
             "validation_metrics": manifest["validation_metrics"],
-            "test_metrics": manifest["test_metrics"],
-            "report_sections": manifest["report_sections"],
+            "test_metrics": evaluation["metrics"],
+            "test_dataset_sha256": evaluation["dataset_sha256"],
+            "report_sections": sections,
         }
         arguments.output.parent.mkdir(parents=True, exist_ok=True)
         arguments.output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")

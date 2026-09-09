@@ -2,7 +2,7 @@
 
 Only paths produced under a newly-created workspace are accepted.  The public
 runner executes the workload in a child process so collectors can label that
-process tree without assigning labels to unrelated host activity.
+exact process without assigning labels to unrelated host activity.
 """
 
 from __future__ import annotations
@@ -34,6 +34,8 @@ from ebpf_ransom_lab.contracts import ProcessIdentity
 RUN_SEEDS = (11, 23, 37, 41, 53)
 MAX_WORKLOAD_SECONDS = 15.0
 MAX_CAPTURE_HOLD_SECONDS = 60.0
+EXPERIMENT_CAPTURE_SECONDS = 60.0
+EXPERIMENT_WORKLOAD_HOLD_SECONDS = 50.0
 MAX_WORKLOAD_FILES = 256
 MAX_WORKLOAD_BYTES = 16 * 1024 * 1024
 SPLIT_BY_SEED: Mapping[int, str] = MappingProxyType(
@@ -137,6 +139,7 @@ class WorkloadRun:
     elapsed_seconds: float
     process_identity: ProcessIdentity
     label_scope: LabelScope
+    limits: WorkloadLimits
     hold_seconds: float = 0.0
 
 
@@ -219,12 +222,13 @@ def build_experiment_manifest() -> dict[str, object]:
                     "label_provenance": "controlled_workload",
                     "plan_sha256": plan_hash,
                     "label_scope": {
-                        "kind": "process_tree",
+                        "kind": "process",
                         "root_identity": "recorded_at_workload_start",
-                        "include_descendants": True,
+                        "include_descendants": False,
                         "background_activity": "unlabeled",
                     },
-                    "capture_duration_seconds": 60,
+                    "capture_duration_seconds": EXPERIMENT_CAPTURE_SECONDS,
+                    "workload_hold_seconds": EXPERIMENT_WORKLOAD_HOLD_SECONDS,
                 }
             )
     return {
@@ -259,15 +263,15 @@ def workload_run_manifest(result: WorkloadRun) -> dict[str, object]:
             "tgid": identity.tgid,
             "start_time_ns": identity.start_time_ns,
         }],
-        "process_tree_policy": "collector lifecycle records may add verified descendants only",
+        "process_scope_policy": "root_process_only",
         "background_activity": "unlabeled",
         "workspace": str(result.workspace),
         "status": result.status,
-        "capture_duration_seconds": result.hold_seconds,
+        "workload_hold_seconds": result.hold_seconds,
         "limits": {
-            "max_seconds": MAX_WORKLOAD_SECONDS,
-            "max_files": MAX_WORKLOAD_FILES,
-            "max_bytes": MAX_WORKLOAD_BYTES,
+            "max_seconds": result.limits.max_seconds,
+            "max_files": result.limits.max_files,
+            "max_bytes": result.limits.max_bytes,
         },
     }
 
@@ -314,6 +318,7 @@ def run_workload(
 ) -> WorkloadRun:
     """Run one scenario in a new child process and generated workspace."""
 
+    ensure_unprivileged_workload()
     selected_limits = limits or WorkloadLimits()
     selected_limits.validate()
     _validate_hold_seconds(hold_seconds)
@@ -390,11 +395,12 @@ def run_workload(
         elapsed_seconds=elapsed,
         process_identity=identity,
         label_scope=LabelScope(
-            kind="process_tree",
+            kind="process",
             root_identity=identity,
-            include_descendants=True,
+            include_descendants=False,
             background_activity="unlabeled",
         ),
+        limits=selected_limits,
         hold_seconds=hold_seconds,
     )
 
@@ -645,66 +651,68 @@ def _random_bytes(rng: random.Random, size: int) -> bytes:
 
 
 def _copying_plan(rng: random.Random) -> Iterable[Action]:
-    for index in range(4):
+    for index in range(rng.randint(3, 16)):
         source = f"source/document-{index}.dat"
-        yield Action("write", source, _random_bytes(rng, 512))
+        yield Action("write", source, _random_bytes(rng, rng.randint(384, 1024)))
         yield Action("copy", f"copies/document-{index}.dat", source=source)
 
 
 def _archiving_plan(rng: random.Random) -> Iterable[Action]:
-    sources = tuple(f"archive-input/item-{index}.txt" for index in range(4))
+    sources = tuple(
+        f"archive-input/item-{index}.txt" for index in range(rng.randint(8, 40))
+    )
     for source in sources:
-        yield Action("write", source, _random_bytes(rng, 384))
+        yield Action("write", source, _random_bytes(rng, rng.randint(256, 768)))
     yield Action("archive", "output/bundle.tar", sources=sources)
 
 
 def _compression_plan(rng: random.Random) -> Iterable[Action]:
-    for index in range(4):
+    for index in range(rng.randint(3, 20)):
         source = f"compression-input/log-{index}.txt"
-        yield Action("write", source, _random_bytes(rng, 768))
+        yield Action("write", source, _random_bytes(rng, rng.randint(512, 1536)))
         yield Action("compress", f"compressed/log-{index}.txt.gz", source=source)
 
 
 def _small_build_plan(rng: random.Random) -> Iterable[Action]:
     salt = rng.randrange(1_000_000)
-    for index in range(3):
-        source = f"build/src/module_{index}.py"
+    for index in range(rng.randint(2, 10)):
+        source = f"build/src/{salt:06d}/module_{index}.py"
         code = (
             f"BUILD_SALT = {salt}\n"
             f"def value_{index}():\n"
             f"    return BUILD_SALT + {index}\n"
         ).encode("utf-8")
         yield Action("write", source, code)
-        yield Action("compile", f"build/out/module_{index}.pyc", source=source)
+        yield Action("compile", f"build/out/{salt:06d}/module_{index}.pyc", source=source)
 
 
 def _bulk_editing_plan(rng: random.Random) -> Iterable[Action]:
-    for index in range(8):
+    for index in range(rng.randint(5, 12)):
         path = f"documents/note-{index}.txt"
-        yield Action("write", path, _random_bytes(rng, 192))
-        yield Action("write", path, _random_bytes(rng, 224))
+        for _ in range(rng.randint(2, 5)):
+            yield Action("write", path, _random_bytes(rng, rng.randint(128, 384)))
 
 
 def _rapid_replacement_plan(rng: random.Random) -> Iterable[Action]:
     target = "generated/current.dat"
-    yield Action("write", target, _random_bytes(rng, 256))
-    for _ in range(16):
-        yield Action("replace", target, _random_bytes(rng, 256))
+    yield Action("write", target, _random_bytes(rng, rng.randint(192, 512)))
+    for _ in range(rng.randint(8, 40)):
+        yield Action("replace", target, _random_bytes(rng, rng.randint(192, 512)))
 
 
 def _churn_plan(rng: random.Random) -> Iterable[Action]:
-    for index in range(20):
+    for index in range(rng.randint(12, 30)):
         path = f"churn/transient-{index:02d}.tmp"
-        yield Action("write", path, _random_bytes(rng, 128))
+        yield Action("write", path, _random_bytes(rng, rng.randint(64, 320)))
         yield Action("delete", path)
 
 
 def _paced_replacement_plan(rng: random.Random) -> Iterable[Action]:
     target = "paced/current.dat"
-    yield Action("write", target, _random_bytes(rng, 256))
-    for _ in range(8):
-        yield Action("pause", delay_seconds=0.02)
-        yield Action("replace", target, _random_bytes(rng, 256))
+    yield Action("write", target, _random_bytes(rng, rng.randint(192, 512)))
+    for _ in range(rng.randint(6, 15)):
+        yield Action("pause", delay_seconds=rng.uniform(0.01, 0.08))
+        yield Action("replace", target, _random_bytes(rng, rng.randint(192, 512)))
 
 
 _PLANNERS: Mapping[str, Callable[[random.Random], Iterable[Action]]] = MappingProxyType(
@@ -739,6 +747,17 @@ def _process_identity() -> ProcessIdentity:
     except (OSError, ValueError, IndexError, AttributeError):
         pass
     return ProcessIdentity(boot_id, os.getpid(), process_start_ns)
+
+
+def _effective_uid() -> int | None:
+    return os.geteuid() if hasattr(os, "geteuid") else None
+
+
+def ensure_unprivileged_workload() -> None:
+    """Fail before mutation when a workload is invoked with root privileges."""
+
+    if _effective_uid() == 0:
+        raise PermissionError("controlled workloads must run as an ordinary user")
 
 
 def _validate_hold_seconds(value: float) -> None:
@@ -780,9 +799,10 @@ def _terminate_process(process: subprocess.Popen[str]) -> None:
 
 
 def _internal_run(arguments: argparse.Namespace) -> int:
-    identity = _process_identity()
-    limits = WorkloadLimits(arguments.max_seconds, arguments.max_files, arguments.max_bytes)
     try:
+        ensure_unprivileged_workload()
+        identity = _process_identity()
+        limits = WorkloadLimits(arguments.max_seconds, arguments.max_files, arguments.max_bytes)
         plan = plan_workload(arguments.scenario, arguments.seed)
         stats = execute_plan(
             plan, Path(arguments.approved_root), Path(arguments.workspace), limits

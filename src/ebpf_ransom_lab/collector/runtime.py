@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 import importlib
 import os
+import re
 from collections import deque
 from dataclasses import replace
 from pathlib import Path
@@ -18,6 +19,8 @@ from .protocol import CollectorHealth, LossCounters, NormalizedEvent
 
 BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
 NSEC_PER_SECOND = 1_000_000_000
+MAX_QUEUE_LIMIT = 65_536
+RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
 
 
 class CollectorUnavailableError(RuntimeError):
@@ -57,8 +60,15 @@ class CollectorConsumer:
     """Validate kernel records before placing them on a bounded user-space queue."""
 
     def __init__(self, *, run_id: str, boot_id: str, queue_limit: int) -> None:
-        if not isinstance(queue_limit, int) or isinstance(queue_limit, bool) or queue_limit < 1:
-            raise ValueError("queue_limit must be a positive integer")
+        if not isinstance(run_id, str) or RUN_ID_PATTERN.fullmatch(run_id) is None:
+            raise ValueError("run_id must be 1-128 characters using letters, numbers, dots, underscores, colons, or dashes")
+        if (
+            not isinstance(queue_limit, int)
+            or isinstance(queue_limit, bool)
+            or queue_limit < 1
+            or queue_limit > MAX_QUEUE_LIMIT
+        ):
+            raise ValueError(f"queue_limit must be between 1 and {MAX_QUEUE_LIMIT}")
         self.run_id = run_id
         self.boot_id = boot_id
         self.queue_limit = queue_limit
@@ -151,21 +161,24 @@ class BccCollector:
             raise ValueError("timeout_ms must be a non-negative integer")
         try:
             self.bpf.ring_buffer_poll(timeout_ms)
-        except Exception:
+        except Exception as error:
             self.connected = False
-            raise
+            raise CollectorUnavailableError("collector polling failed") from error
 
     def stop(self) -> None:
         self.connected = False
 
     def _kernel_loss(self, index: int) -> int:
         if self.bpf is None:
-            return 0
+            raise CollectorUnavailableError("kernel loss telemetry is unavailable")
         try:
             value = self.bpf["loss_counters"][ctypes.c_uint(index)]
-        except (KeyError, LookupError, TypeError):
-            return 0
-        return int(value.value if hasattr(value, "value") else value)
+            raw = value.value if hasattr(value, "value") else value
+        except Exception as error:
+            raise CollectorUnavailableError("kernel loss telemetry is unreadable") from error
+        if isinstance(raw, bool) or not isinstance(raw, int) or not 0 <= raw < 2**64:
+            raise CollectorUnavailableError("kernel loss telemetry contains an invalid counter")
+        return raw
 
     def health(self, *, monotonic_ns: int) -> CollectorHealth:
         user = self.consumer.counters()

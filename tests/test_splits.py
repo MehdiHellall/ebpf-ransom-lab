@@ -32,7 +32,7 @@ class ControlledWorkloadSplitTests(unittest.TestCase):
             {(run["scenario"], run["seed"]) for run in runs},
         )
 
-    def test_manifest_split_counts_and_process_tree_label_scope(self):
+    def test_manifest_split_counts_and_exact_process_label_scope(self):
         runs = build_experiment_manifest()["runs"]
 
         self.assertEqual(24, sum(run["split"] == "training" for run in runs))
@@ -41,13 +41,14 @@ class ControlledWorkloadSplitTests(unittest.TestCase):
         for run in runs:
             self.assertEqual(SPLIT_BY_SEED[run["seed"]], run["split"])
             self.assertEqual(60, run["capture_duration_seconds"])
+            self.assertEqual(50, run["workload_hold_seconds"])
             self.assertEqual("controlled_workload", run["label_provenance"])
             self.assertEqual(64, len(run["plan_sha256"]))
             self.assertEqual(
                 {
-                    "kind": "process_tree",
+                    "kind": "process",
                     "root_identity": "recorded_at_workload_start",
-                    "include_descendants": True,
+                    "include_descendants": False,
                     "background_activity": "unlabeled",
                 },
                 run["label_scope"],

@@ -12,6 +12,7 @@ from ebpf_ransom_lab.collector.runtime import (
     BccCollector,
     CollectorConsumer,
     CollectorUnavailableError,
+    MAX_QUEUE_LIMIT,
     read_boot_id,
 )
 
@@ -90,6 +91,14 @@ class CollectorRuntimeTests(unittest.TestCase):
         self.assertEqual([4], [event.sequence for event in consumer.drain()])
         self.assertEqual([], consumer.drain())
 
+    def test_consumer_rejects_unsafe_run_ids_and_unbounded_queues(self):
+        with self.assertRaisesRegex(ValueError, "run_id"):
+            CollectorConsumer(run_id="../run", boot_id="boot", queue_limit=1)
+        with self.assertRaisesRegex(ValueError, "queue_limit"):
+            CollectorConsumer(run_id="run", boot_id="boot", queue_limit=0)
+        with self.assertRaisesRegex(ValueError, "queue_limit"):
+            CollectorConsumer(run_id="run", boot_id="boot", queue_limit=MAX_QUEUE_LIMIT + 1)
+
     def test_bcc_import_is_deferred_until_start_and_kernel_losses_are_merged(self):
         consumer = CollectorConsumer(run_id="run", boot_id="boot", queue_limit=2)
         with patch(
@@ -110,6 +119,21 @@ class CollectorRuntimeTests(unittest.TestCase):
         self.assertEqual(19, health["loss_counters"]["filename_read_failures"])
         self.assertEqual(23, health["loss_counters"]["identity_read_failures"])
         self.assertTrue(health["connected"])
+
+    def test_health_fails_closed_when_kernel_loss_telemetry_is_unreadable(self):
+        consumer = CollectorConsumer(run_id="run", boot_id="boot", queue_limit=2)
+        collector = BccCollector(consumer)
+        collector.bpf = {}
+        with self.assertRaisesRegex(CollectorUnavailableError, "loss telemetry"):
+            collector.health(monotonic_ns=1)
+
+        class InvalidLossMap:
+            def __getitem__(self, _key):
+                return FakeScalar(-1)
+
+        collector.bpf = {"loss_counters": InvalidLossMap()}
+        with self.assertRaisesRegex(CollectorUnavailableError, "loss telemetry"):
+            collector.health(monotonic_ns=1)
 
     def test_bcc_uses_the_same_proc_start_tick_resolution_as_workloads(self):
         consumer = CollectorConsumer(run_id="run", boot_id="boot", queue_limit=2)

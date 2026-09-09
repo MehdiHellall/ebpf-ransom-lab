@@ -8,6 +8,7 @@ from ebpf_ransom_lab.contracts import (
     Heartbeat,
     ProcessIdentity,
     ProcessExit,
+    RunEnd,
     RunStart,
     record_from_dict,
 )
@@ -48,6 +49,19 @@ class ContractTests(unittest.TestCase):
     def test_run_start_round_trip_freezes_capture_alignment(self):
         record = RunStart("run", 123, source="live")
         self.assertEqual(record, record_from_dict(record.to_dict()))
+
+    def test_run_end_round_trip_freezes_success_and_total_loss(self):
+        record = RunEnd("run", 9, 60_000_000_123, status="complete", total_lost_events=0)
+        self.assertEqual(record, record_from_dict(record.to_dict()))
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            record.status = "failed"
+
+        for make in (
+            lambda: RunEnd("run", 0, 1, status="unknown"),
+            lambda: RunEnd("run", 0, 1, total_lost_events=-1),
+        ):
+            with self.subTest(make=make), self.assertRaises(ValueError):
+                make()
 
     def test_window_has_deterministic_identity_feature_mapping_and_quality(self):
         window = FeatureWindow(

@@ -106,6 +106,45 @@ class RunStart:
 
 
 @dataclass(frozen=True, slots=True)
+class RunEnd:
+    """A terminal marker emitted only after a collector finishes cleanly."""
+
+    run_id: str
+    collector_sequence: int
+    timestamp_ns: int
+    status: str = "complete"
+    total_lost_events: int = 0
+    schema_version: int = CONTRACT_VERSION
+
+    def __post_init__(self) -> None:
+        _version(self.schema_version, "schema", CONTRACT_VERSION)
+        _text(self.run_id, "run_id")
+        _integer(self.collector_sequence, "collector_sequence", maximum_exclusive=2**64)
+        _integer(self.timestamp_ns, "timestamp_ns", maximum_exclusive=2**64)
+        if self.status not in {"complete", "failed"}:
+            raise ValueError("run end status must be complete or failed")
+        _integer(self.total_lost_events, "total_lost_events", maximum_exclusive=2**64)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "type": "run_end",
+            "schema_version": self.schema_version,
+            "run_id": self.run_id,
+            "collector_sequence": self.collector_sequence,
+            "timestamp_ns": self.timestamp_ns,
+            "status": self.status,
+            "total_lost_events": self.total_lost_events,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> RunEnd:
+        try:
+            return cls(**_record_payload(value, "run_end"))
+        except TypeError as error:
+            raise ValueError(f"invalid run end: {error}") from error
+
+
+@dataclass(frozen=True, slots=True)
 class Event:
     """One normalized file-operation event in collector emission order."""
 
@@ -382,7 +421,7 @@ class FeatureWindow:
 
 
 StreamRecord: TypeAlias = Event | Heartbeat | ProcessExit
-SerializableRecord: TypeAlias = ProcessIdentity | RunStart | Event | Heartbeat | ProcessExit | FeatureWindow
+SerializableRecord: TypeAlias = ProcessIdentity | RunStart | RunEnd | Event | Heartbeat | ProcessExit | FeatureWindow
 
 
 def _plain_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -409,6 +448,7 @@ def record_from_dict(value: Mapping[str, Any]) -> SerializableRecord:
     classes = {
         "process_identity": ProcessIdentity,
         "run_start": RunStart,
+        "run_end": RunEnd,
         "event": Event,
         "heartbeat": Heartbeat,
         "process_exit": ProcessExit,
@@ -421,6 +461,6 @@ def record_from_dict(value: Mapping[str, Any]) -> SerializableRecord:
 
 
 def record_to_dict(record: SerializableRecord) -> dict[str, Any]:
-    if not isinstance(record, (ProcessIdentity, RunStart, Event, Heartbeat, ProcessExit, FeatureWindow)):
+    if not isinstance(record, (ProcessIdentity, RunStart, RunEnd, Event, Heartbeat, ProcessExit, FeatureWindow)):
         raise ValueError(f"unsupported record {type(record).__name__}")
     return record.to_dict()

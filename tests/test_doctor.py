@@ -26,10 +26,15 @@ class DoctorTests(unittest.TestCase):
                 {
                     "/sys/kernel/btf/vmlinux",
                     "/lib/modules/6.8.0-test/build",
+                    "/sys/kernel/debug/tracing/events/syscalls/sys_enter_open",
+                    "/sys/kernel/debug/tracing/events/syscalls/sys_exit_open",
                     "/sys/kernel/debug/tracing/events/syscalls/sys_enter_openat",
                     "/sys/kernel/debug/tracing/events/syscalls/sys_exit_openat",
+                    "/sys/kernel/debug/tracing/events/syscalls/sys_enter_unlink",
+                    "/sys/kernel/debug/tracing/events/syscalls/sys_exit_unlink",
                     "/sys/kernel/debug/tracing/events/syscalls/sys_enter_unlinkat",
                     "/sys/kernel/debug/tracing/events/syscalls/sys_exit_unlinkat",
+                    "/sys/kernel/debug/tracing/events/sched/sched_process_exit",
                 }
             ),
             "data_directory_writable": True,

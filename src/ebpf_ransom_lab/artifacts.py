@@ -7,7 +7,7 @@ import math
 from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 import numpy as np
 import skops.io
@@ -16,9 +16,14 @@ from ebpf_ransom_lab.features import FEATURE_NAMES, FEATURE_VERSION
 from ebpf_ransom_lab.modeling import LabeledWindow, TrainingResult
 
 
-ARTIFACT_VERSION = "model-artifact-v1"
+ARTIFACT_VERSION = "model-artifact-v2"
 MODEL_FILENAME = "model.skops"
 MANIFEST_FILENAME = "manifest.json"
+EVALUATION_FILENAME = "test-evaluation.json"
+_RATE_METRICS = frozenset(("precision", "recall", "f1"))
+_COUNT_METRICS = frozenset(
+    ("true_negatives", "false_positives", "false_negatives", "true_positives")
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,7 +33,7 @@ class LoadedArtifact:
     estimator: object | None
     feature_names: tuple[str, ...]
     feature_version: int
-    training_manifest_hash: str
+    selection_manifest_hash: str
 
     def score(self, samples: Sequence[LabeledWindow]) -> tuple[float, ...]:
         for sample in samples:
@@ -72,13 +77,12 @@ def save_artifact(target: Path, result: TrainingResult) -> None:
         "threshold": result.threshold,
         "score_semantics": "decision score; not a calibrated probability",
         "random_seed": result.random_seed,
-        "training_manifest_hash": result.training_manifest_hash,
-        "training_captures": list(result.training_captures),
+        "selection_manifest_hash": result.selection_manifest_hash,
+        "selection_captures": list(result.selection_captures),
         "dependencies": {
             name: version(name) for name in ("numpy", "scikit-learn", "skops")
         },
         "validation_metrics": {name: dict(values) for name, values in result.validation_metrics.items()},
-        "test_metrics": dict(result.test_metrics),
         "report_sections": _plain(result.report_sections),
     }
     (target / MANIFEST_FILENAME).write_text(
@@ -114,8 +118,61 @@ def load_artifact(target: Path) -> LoadedArtifact:
         estimator=estimator,
         feature_names=tuple(manifest["feature_names"]),
         feature_version=manifest["feature_version"],
-        training_manifest_hash=manifest["training_manifest_hash"],
+        selection_manifest_hash=manifest["selection_manifest_hash"],
     )
+
+
+def save_test_evaluation(
+    target: Path, *, dataset_sha256: str, metrics: Mapping[str, float | int]
+) -> None:
+    """Persist the one allowed held-out evaluation without rewriting the artifact."""
+
+    artifact = Path(target)
+    load_artifact(artifact)
+    _validate_digest(dataset_sha256, "test dataset")
+    plain_metrics = _validated_test_metrics(metrics)
+    destination = artifact / EVALUATION_FILENAME
+    artifact_manifest_sha256 = _sha256(artifact / MANIFEST_FILENAME)
+    with destination.open("x", encoding="utf-8", newline="\n") as stream:
+        json.dump(
+            {
+                "schema_version": 1,
+                "split": "test",
+                "dataset_sha256": dataset_sha256,
+                "artifact_manifest_sha256": artifact_manifest_sha256,
+                "metrics": plain_metrics,
+            },
+            stream,
+            indent=2,
+            sort_keys=True,
+        )
+        stream.write("\n")
+
+
+def load_test_evaluation(target: Path) -> dict[str, object]:
+    path = Path(target) / EVALUATION_FILENAME
+    if path.is_symlink():
+        raise ValueError("test evaluation cannot be a symlink")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError("held-out test has not been evaluated exactly once") from error
+    if (
+        not isinstance(value, dict)
+        or set(value) != {
+            "schema_version", "split", "dataset_sha256",
+            "artifact_manifest_sha256", "metrics",
+        }
+        or value.get("schema_version") != 1
+        or value.get("split") != "test"
+    ):
+        raise ValueError("invalid test evaluation record")
+    _validate_digest(value.get("dataset_sha256"), "test dataset")
+    _validate_digest(value.get("artifact_manifest_sha256"), "artifact manifest")
+    if value["artifact_manifest_sha256"] != _sha256(Path(target) / MANIFEST_FILENAME):
+        raise ValueError("test evaluation belongs to a different artifact")
+    value["metrics"] = _validated_test_metrics(value.get("metrics"))
+    return value
 
 
 def _validate_manifest(manifest: object) -> None:
@@ -133,9 +190,7 @@ def _validate_manifest(manifest: object) -> None:
     threshold = manifest.get("threshold")
     if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not math.isfinite(threshold):
         raise ValueError("invalid model threshold")
-    digest = manifest.get("training_manifest_hash")
-    if not isinstance(digest, str) or len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
-        raise ValueError("invalid training manifest hash")
+    _validate_digest(manifest.get("selection_manifest_hash"), "selection manifest")
     dependencies = manifest.get("dependencies")
     if not isinstance(dependencies, dict) or any(dependencies.get(name) != version(name) for name in ("numpy", "scikit-learn", "skops")):
         raise ValueError("incompatible dependency versions")
@@ -147,6 +202,46 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _validate_digest(value: object, name: str) -> None:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"invalid {name} hash")
+
+
+def _validated_test_metrics(value: object) -> dict[str, float | int]:
+    if not isinstance(value, Mapping):
+        raise ValueError("invalid test metrics")
+    metrics = dict(value)
+    if set(metrics) != _RATE_METRICS | _COUNT_METRICS | {"mcc"}:
+        raise ValueError("invalid test metrics")
+    if any(
+        isinstance(metrics[name], bool)
+        or not isinstance(metrics[name], (int, float))
+        or not math.isfinite(float(metrics[name]))
+        or not 0 <= float(metrics[name]) <= 1
+        for name in _RATE_METRICS
+    ):
+        raise ValueError("invalid test metrics")
+    if (
+        isinstance(metrics["mcc"], bool)
+        or not isinstance(metrics["mcc"], (int, float))
+        or not math.isfinite(float(metrics["mcc"]))
+        or not -1 <= float(metrics["mcc"]) <= 1
+    ):
+        raise ValueError("invalid test metrics")
+    if any(
+        isinstance(metrics[name], bool)
+        or not isinstance(metrics[name], int)
+        or metrics[name] < 0
+        for name in _COUNT_METRICS
+    ):
+        raise ValueError("invalid test metrics")
+    return metrics
 
 
 def _plain(value: object) -> object:

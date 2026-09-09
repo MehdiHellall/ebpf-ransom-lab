@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 from typing import TextIO
 
-from ebpf_ransom_lab.contracts import Event, Heartbeat, ProcessExit, RunStart, record_from_dict
+from ebpf_ransom_lab.contracts import Event, Heartbeat, ProcessExit, RunEnd, RunStart, record_from_dict
 from ebpf_ransom_lab.detection import RuleScorer
 from ebpf_ransom_lab.features import WindowFeatureEngine
 from ebpf_ransom_lab.storage import Store
@@ -28,6 +28,7 @@ def ingest_jsonl_stream(
     run_id: str | None = None
     last_timestamp = capture_start_ns or 0
     records = windows = alerts = lost_events = 0
+    has_run_start = ended = False
     try:
         for line_number, line in enumerate(stream, start=1):
             if not line.strip():
@@ -39,6 +40,8 @@ def ingest_jsonl_stream(
                 record = record_from_dict(raw)
             except (ValueError, json.JSONDecodeError) as error:
                 raise ValueError(f"invalid collector line {line_number}: {error}") from error
+            if ended:
+                raise ValueError(f"invalid collector line {line_number}: record follows run end")
             if isinstance(record, RunStart):
                 if run_id is not None:
                     raise ValueError(f"invalid collector line {line_number}: run start must be first")
@@ -47,8 +50,31 @@ def ingest_jsonl_stream(
                 capture_start_ns = record.capture_start_ns
                 engine = WindowFeatureEngine(capture_start_ns)
                 run_id = record.run_id
+                has_run_start = True
                 last_timestamp = capture_start_ns
                 store.upsert_run(run_id, source="live", started_ns=capture_start_ns, status="collecting")
+                continue
+            if isinstance(record, RunEnd):
+                if run_id is None or engine is None or capture_start_ns is None:
+                    raise ValueError(f"invalid collector line {line_number}: run end has no run start")
+                if record.run_id != run_id or record.status != "complete":
+                    raise ValueError(f"invalid collector line {line_number}: unsuccessful run end")
+                if record.total_lost_events != lost_events:
+                    raise ValueError(f"invalid collector line {line_number}: loss total mismatch")
+                added_windows, added_alerts = _persist(
+                    engine.finish(record.timestamp_ns), store, scorer
+                )
+                windows += added_windows
+                alerts += added_alerts
+                last_timestamp = record.timestamp_ns
+                ended = True
+                store.upsert_run(
+                    run_id, source="live", started_ns=capture_start_ns, status="complete"
+                )
+                store.update_health(
+                    connected=False, event_rate=0.0, lost_events=lost_events,
+                    recording=False, error=None,
+                )
                 continue
             if not isinstance(record, (Event, Heartbeat, ProcessExit)):
                 raise ValueError(f"invalid collector line {line_number}: record is not a stream event")
@@ -73,11 +99,17 @@ def ingest_jsonl_stream(
             )
         if run_id is None or engine is None or capture_start_ns is None:
             raise ValueError("collector stream contains no records")
-        added_windows, added_alerts = _persist(engine.finish(last_timestamp), store, scorer)
-        windows += added_windows
-        alerts += added_alerts
-        store.upsert_run(run_id, source="live", started_ns=capture_start_ns, status="complete")
-        store.update_health(connected=False, event_rate=0.0, lost_events=lost_events, recording=False, error=None)
+        if has_run_start and not ended:
+            raise ValueError("collector stream is missing its terminal run-end record")
+        if not ended:
+            added_windows, added_alerts = _persist(engine.finish(last_timestamp), store, scorer)
+            windows += added_windows
+            alerts += added_alerts
+            store.upsert_run(run_id, source="live", started_ns=capture_start_ns, status="complete")
+            store.update_health(
+                connected=False, event_rate=0.0, lost_events=lost_events,
+                recording=False, error=None,
+            )
         return IngestionSummary(run_id, records, windows, alerts)
     except Exception as error:
         store.update_health(connected=False, event_rate=0.0, lost_events=lost_events, recording=False, error=str(error))

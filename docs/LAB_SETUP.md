@@ -80,7 +80,8 @@ loading, or workload runner as root.
 
 `ransomlab doctor --scope collector` verifies Linux, root privileges, BCC Python
 bindings, kernel BTF, matching kernel headers, BPF ring-buffer support, and the
-syscall tracepoints used by the first collector. A failed check must be fixed
+complete syscall and process-exit tracepoint set used by the collector. A failed
+check must be fixed
 before collection begins. Then make and replay a short smoke capture before
 recording experiment data:
 
@@ -90,7 +91,9 @@ sudo .venv/bin/ransomlab collect --run-id collector-smoke --duration-seconds 10 
 ```
 
 Keep the raw capture and feature output only when lifecycle identity and health
-records are present and no loss is reported.
+records are present, no loss is reported, and the final JSONL record is a
+successful `run_end`. Controlled experiment captures must additionally pass
+`ransomlab capture validate` as documented in the training guide.
 
 Ubuntu's BCC package may lag upstream, but the packaged version is suitable for
 this pinned prototype if the doctor and smoke test pass. Record the kernel, BCC,

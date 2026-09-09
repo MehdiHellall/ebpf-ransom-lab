@@ -61,7 +61,7 @@ class DatasetValidationTests(unittest.TestCase):
 
 
 class TrainingTests(unittest.TestCase):
-    def test_training_is_grouped_repeatable_and_evaluates_held_out_data(self):
+    def test_training_is_grouped_repeatable_and_does_not_touch_held_out_data(self):
         samples = []
         for label, stem, low, high in ((0, "benign", 0, 1), (1, "suspicious", 9, 12)):
             for group_index in range(3):
@@ -70,16 +70,19 @@ class TrainingTests(unittest.TestCase):
             samples.extend(sample(f"{stem}-validation", "validation", label, high, i) for i in range(2))
             samples.extend(sample(f"{stem}-test", "test", label, high, i) for i in range(2))
 
-        first = train_and_select(tuple(samples), random_seed=37)
-        second = train_and_select(tuple(samples), random_seed=37)
+        selection = tuple(sample for sample in samples if sample.split != "test")
+        first = train_and_select(selection, random_seed=37)
+        second = train_and_select(selection, random_seed=37)
 
         self.assertEqual(first.selected_name, second.selected_name)
         self.assertEqual(first.threshold, second.threshold)
-        self.assertEqual(first.test_metrics, second.test_metrics)
         self.assertEqual({"rule", "rbf_svm", "random_forest"}, set(first.validation_metrics))
-        self.assertEqual(1.0, first.test_metrics["f1"])
         self.assertEqual({"controlled_workloads", "published_data"}, set(first.report_sections))
+        self.assertEqual("selected_not_tested", first.report_sections["controlled_workloads"]["status"])
         self.assertEqual("blocked_label_provenance", first.report_sections["published_data"]["status"])
+
+        with self.assertRaisesRegex(ValueError, "withheld"):
+            train_and_select(tuple(samples), random_seed=37)
 
 
 if __name__ == "__main__":

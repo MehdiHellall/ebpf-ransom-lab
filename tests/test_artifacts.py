@@ -3,7 +3,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ebpf_ransom_lab.artifacts import load_artifact, save_artifact
+from ebpf_ransom_lab.artifacts import (
+    load_artifact,
+    load_test_evaluation,
+    save_artifact,
+    save_test_evaluation,
+)
 from ebpf_ransom_lab.features import FEATURE_NAMES, FEATURE_VERSION
 from ebpf_ransom_lab.modeling import LabeledWindow, train_and_select
 
@@ -26,8 +31,12 @@ def make_samples(feature_name="D_sum"):
 
 
 class ArtifactTests(unittest.TestCase):
+    @staticmethod
+    def selection_samples(feature_name="D_sum"):
+        return tuple(sample for sample in make_samples(feature_name) if sample.split != "test")
+
     def test_round_trip_preserves_scores_and_metadata(self):
-        result = train_and_select(make_samples(), random_seed=23)
+        result = train_and_select(self.selection_samples(), random_seed=23)
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "model"
             save_artifact(target, result)
@@ -40,7 +49,7 @@ class ArtifactTests(unittest.TestCase):
             self.assertEqual(result.score((sample,))[0], loaded.score((sample,))[0])
 
     def test_rejects_tampered_or_incompatible_artifact(self):
-        result = train_and_select(make_samples(), random_seed=23)
+        result = train_and_select(self.selection_samples(), random_seed=23)
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "model"
             save_artifact(target, result)
@@ -52,7 +61,7 @@ class ArtifactTests(unittest.TestCase):
                 load_artifact(target)
 
     def test_safe_skops_model_round_trip_and_checksum(self):
-        result = train_and_select(make_samples("O_sum"), random_seed=23)
+        result = train_and_select(self.selection_samples("O_sum"), random_seed=23)
         self.assertEqual("rbf_svm", result.selected_name)
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "model"
@@ -63,6 +72,21 @@ class ArtifactTests(unittest.TestCase):
             model_path.write_bytes(model_path.read_bytes() + b"tamper")
             with self.assertRaisesRegex(ValueError, "checksum"):
                 load_artifact(target)
+
+    def test_held_out_evaluation_is_persisted_exactly_once(self):
+        result = train_and_select(self.selection_samples(), random_seed=23)
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "model"
+            save_artifact(target, result)
+            metrics = {
+                "precision": 1.0, "recall": 1.0, "f1": 1.0, "mcc": 1.0,
+                "true_negatives": 1, "false_positives": 0,
+                "false_negatives": 0, "true_positives": 1,
+            }
+            save_test_evaluation(target, dataset_sha256="a" * 64, metrics=metrics)
+            self.assertEqual(1.0, load_test_evaluation(target)["metrics"]["f1"])
+            with self.assertRaises(FileExistsError):
+                save_test_evaluation(target, dataset_sha256="a" * 64, metrics=metrics)
 
 
 if __name__ == "__main__":

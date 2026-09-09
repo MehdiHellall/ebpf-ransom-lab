@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ebpf_ransom_lab.contracts import Event, Heartbeat, ProcessIdentity, RunStart
+from ebpf_ransom_lab.contracts import Event, Heartbeat, ProcessIdentity, RunEnd, RunStart
 from ebpf_ransom_lab.features import WINDOW_NS
 from ebpf_ransom_lab.ingestion import ingest_jsonl_stream
 from ebpf_ransom_lab.storage import Store
@@ -43,6 +43,7 @@ class IngestionTests(unittest.TestCase):
             RunStart("run", 0, source="live"),
             Event("run", 1, 0, identity, 8, "O"),
             Heartbeat("run", 2, WINDOW_NS),
+            RunEnd("run", 3, WINDOW_NS),
         )
         stream = io.StringIO("".join(json.dumps(record.to_dict()) + "\n" for record in records))
         with tempfile.TemporaryDirectory() as directory:

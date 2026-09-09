@@ -83,9 +83,9 @@ class WorkloadTests(unittest.TestCase):
             self.assertEqual(64, len(run.plan_sha256))
             self.assertGreater(run.files_created, 0)
             self.assertGreater(run.bytes_written, 0)
-            self.assertEqual("process_tree", run.label_scope.kind)
+            self.assertEqual("process", run.label_scope.kind)
             self.assertEqual(run.process_identity, run.label_scope.root_identity)
-            self.assertTrue(run.label_scope.include_descendants)
+            self.assertFalse(run.label_scope.include_descendants)
             self.assertEqual("unlabeled", run.label_scope.background_activity)
             self.assertIsInstance(run.process_identity, ProcessIdentity)
             self.assertGreater(run.process_identity.tgid, 0)
@@ -240,6 +240,29 @@ class WorkloadTests(unittest.TestCase):
     def test_live_capture_hold_is_bounded_separately_from_file_operation_limits(self):
         with self.assertRaisesRegex(ValueError, "hold_seconds"):
             run_workload("copying", 11, self.approved_root, hold_seconds=60.1)
+
+    def test_root_is_rejected_before_workspace_or_child_process_creation(self):
+        before = tuple(self.approved_root.iterdir())
+        with patch("ebpf_ransom_lab.workloads._effective_uid", return_value=0), \
+             patch("ebpf_ransom_lab.workloads.subprocess.Popen") as launch:
+            with self.assertRaisesRegex(PermissionError, "ordinary user"):
+                run_workload("copying", 11, self.approved_root)
+        launch.assert_not_called()
+        self.assertEqual(before, tuple(self.approved_root.iterdir()))
+
+    def test_seed_changes_observable_workload_structure_not_only_file_bytes(self):
+        def signature(scenario, seed):
+            return tuple(
+                (action.operation, action.path, action.source, action.sources, action.delay_seconds)
+                for action in plan_workload(scenario, seed).actions
+            )
+
+        for scenario in SCENARIOS:
+            with self.subTest(scenario=scenario):
+                self.assertEqual(
+                    len({signature(scenario, seed) for seed in (11, 23, 37, 41, 53)}),
+                    5,
+                )
 
     def test_rejects_invalid_actions_and_workspace_boundaries(self):
         workspace = self.approved_root / "workload-invalid"

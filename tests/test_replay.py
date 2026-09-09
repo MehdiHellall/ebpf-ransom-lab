@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ebpf_ransom_lab.contracts import Event, Heartbeat, ProcessIdentity, RunStart
+from ebpf_ransom_lab.contracts import Event, Heartbeat, ProcessIdentity, RunEnd, RunStart
 from ebpf_ransom_lab.features import WINDOW_NS
 from ebpf_ransom_lab.recording import (
     RecordingBudgetExceeded,
@@ -121,6 +121,26 @@ class ReplayTests(unittest.TestCase):
             replay_records(self.records, capture_start_ns=self.origin),
             replay_records(aligned),
         )
+
+    def test_terminal_run_end_supplies_capture_end_without_becoming_a_feature_record(self):
+        complete = (
+            RunStart("run", self.origin, source="live"),
+            *self.records,
+            RunEnd("run", 6, self.origin + 2 * WINDOW_NS, status="complete"),
+        )
+        self.assertEqual(
+            replay_records(self.records, capture_start_ns=self.origin),
+            replay_records(complete),
+        )
+
+        invalid = (
+            (*complete, complete[-1]),
+            (complete[-1], *complete[:-1]),
+            (*complete[:-1], RunEnd("other", 6, self.origin + 2 * WINDOW_NS)),
+        )
+        for records in invalid:
+            with self.subTest(records=records), self.assertRaises(ValueError):
+                replay_records(records)
 
 
 if __name__ == "__main__":

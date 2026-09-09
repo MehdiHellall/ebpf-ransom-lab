@@ -78,10 +78,9 @@ class TrainingResult:
     feature_names: tuple[str, ...]
     feature_version: int
     random_seed: int
-    training_manifest_hash: str
-    training_captures: tuple[str, ...]
+    selection_manifest_hash: str
+    selection_captures: tuple[str, ...]
     validation_metrics: Mapping[str, Mapping[str, float | int]]
-    test_metrics: Mapping[str, float | int]
     report_sections: Mapping[str, Mapping[str, object]]
 
     def score(self, samples: Sequence[LabeledWindow]) -> tuple[float, ...]:
@@ -133,12 +132,14 @@ def load_dataset(lines: Iterable[str]) -> tuple[LabeledWindow, ...]:
 
 
 def train_and_select(samples: Sequence[LabeledWindow], *, random_seed: int = 37) -> TrainingResult:
-    """Tune only on training groups, select on validation, and test once."""
+    """Tune on training groups and select on validation without reading test rows."""
     samples = tuple(samples)
     validate_dataset(samples)
+    if any(sample.split == "test" for sample in samples):
+        raise ValueError("test samples must remain withheld during model selection")
     by_split = {name: tuple(sample for sample in samples if sample.split == name) for name in SPLITS}
-    if any(not by_split[name] for name in SPLITS):
-        raise ValueError("training, validation, and test samples are required")
+    if not by_split["training"] or not by_split["validation"]:
+        raise ValueError("training and validation samples are required")
 
     training = by_split["training"]
     train_x, train_y, groups = _arrays(training)
@@ -164,21 +165,15 @@ def train_and_select(samples: Sequence[LabeledWindow], *, random_seed: int = 37)
         ),
     )
     threshold = evaluations[selected_name][0]
-    test = by_split["test"]
-    test_x, test_y, _ = _arrays(test)
-    test_scores = _score(selected_name, finalists[selected_name], test_x, FEATURE_NAMES)
-    test_metrics = _metrics(test_y, test_scores >= threshold)
-    manifest_hash = _training_manifest_hash(training)
+    manifest_hash = _selection_manifest_hash(samples)
     validation_metrics = MappingProxyType({
         name: MappingProxyType(dict(metrics)) for name, (_, metrics) in evaluations.items()
     })
-    immutable_test = MappingProxyType(dict(test_metrics))
     report_sections = MappingProxyType({
         "controlled_workloads": MappingProxyType({
-            "status": "evaluated",
+            "status": "selected_not_tested",
             "selected_model": selected_name,
             "validation": validation_metrics[selected_name],
-            "test": immutable_test,
         }),
         "published_data": MappingProxyType({
             "status": "blocked_label_provenance",
@@ -192,10 +187,9 @@ def train_and_select(samples: Sequence[LabeledWindow], *, random_seed: int = 37)
         feature_names=FEATURE_NAMES,
         feature_version=FEATURE_VERSION,
         random_seed=random_seed,
-        training_manifest_hash=manifest_hash,
-        training_captures=tuple(sorted({sample.capture_id for sample in training})),
+        selection_manifest_hash=manifest_hash,
+        selection_captures=tuple(sorted({sample.capture_id for sample in samples})),
         validation_metrics=validation_metrics,
-        test_metrics=immutable_test,
         report_sections=report_sections,
     )
 
@@ -303,7 +297,7 @@ def _metrics(labels: np.ndarray, predictions: np.ndarray) -> dict[str, float | i
     }
 
 
-def _training_manifest_hash(samples: Sequence[LabeledWindow]) -> str:
+def _selection_manifest_hash(samples: Sequence[LabeledWindow]) -> str:
     captures = sorted({(sample.capture_id, sample.capture_hash, sample.split) for sample in samples})
     encoded = json.dumps(captures, separators=(",", ":"), ensure_ascii=True).encode("ascii")
     return hashlib.sha256(encoded).hexdigest()

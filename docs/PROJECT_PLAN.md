@@ -76,7 +76,10 @@ Milestones 3–5 are implemented as a portable, training-ready pipeline:
 versioned normalized recordings, a shared ten-second feature engine, local
 dashboard and replay path, BCC collector source and ABI tests, bounded
 controlled workloads, manifest-bound labels, fixed capture splits,
-capture-grouped model selection, and checksummed safe artifacts.
+capture-grouped model selection, and checksummed safe artifacts. Raw controlled
+captures now require a terminal success marker, zero run-level loss, exact plan
+and process-lifecycle binding, and feature re-derivation before labeling; model
+selection cannot read held-out test rows.
 
 The remaining acceptance work must happen on the pinned Ubuntu VM: compile and
 attach BCC, exercise the collector under syscall/loss/PID-reuse stress, make

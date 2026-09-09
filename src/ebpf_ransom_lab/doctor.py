@@ -15,8 +15,12 @@ MINIMUM_PYTHON = (3, 12)
 MINIMUM_FREE_BYTES = 5 * 1024**3
 MINIMUM_RING_BUFFER_KERNEL = (5, 8)
 TRACEPOINT_NAMES = (
+    "sys_enter_open",
+    "sys_exit_open",
     "sys_enter_openat",
     "sys_exit_openat",
+    "sys_enter_unlink",
+    "sys_exit_unlink",
     "sys_enter_unlinkat",
     "sys_exit_unlinkat",
 )
@@ -25,7 +29,11 @@ TRACEPOINT_BASES = (
     "/sys/kernel/tracing/events/syscalls",
 )
 TRACEPOINT_GROUPS = tuple(
-    tuple(f"{base}/{name}" for name in TRACEPOINT_NAMES) for base in TRACEPOINT_BASES
+    (
+        *(f"{base}/{name}" for name in TRACEPOINT_NAMES),
+        f"{base.rsplit('/syscalls', maxsplit=1)[0]}/sched/sched_process_exit",
+    )
+    for base in TRACEPOINT_BASES
 )
 # Kept as the conventional debugfs paths for callers that build test contexts.
 TRACEPOINTS = TRACEPOINT_GROUPS[0]

@@ -55,11 +55,13 @@ Run the portable quality gate with:
 
 The workflow is designed to prevent the usual research leaks: the split is
 fixed before training, capture groups never cross folds, background activity is
-unlabeled, and partial/loss-affected windows are rejected.
+unlabeled, and an entire capture is rejected when it is truncated, lossy,
+degraded, detached from the frozen plan, or missing the tracked process exit.
 
 ```text
 bounded workload + 60-second collector capture
   → normalized JSONL
+  → lossless capture acceptance + raw SHA-256
   → fixed 10-second feature windows
   → manifest-bound labeled dataset rows
   → grouped CV + validation selection
@@ -82,8 +84,14 @@ manifest-to-dataset sequence.
 - No malware is downloaded, executed, or needed.
 - Every workload uses a fresh generated child directory; symlinks, traversal,
   arbitrary target directories, and resource-limit bypasses are rejected.
+- Controlled workloads refuse to run as root. Only their exact root-process
+  identity is labeled; unrelated activity and unverified descendants remain
+  unlabeled.
 - Only `ransomlab collect` runs as root, on Linux. Its JSONL output is consumed
   by an ordinary-user service.
+- A collector run is complete only when its terminal `run_end` is present and
+  kernel loss counters were readable. Dataset construction revalidates the raw
+  recording and recomputes its feature rows before labeling.
 - The dashboard binds only to `127.0.0.1`, contains no CDN dependency, and
   renders telemetry as text rather than HTML.
 - The published corpus remains frozen; its unresolved labels are never silently
@@ -100,8 +108,9 @@ manifest-to-dataset sequence.
 | `ransomlab serve` | Run the localhost dashboard; optionally consume a JSONL pipe |
 | `ransomlab collect` | Run the privileged BCC sensor in the Ubuntu VM |
 | `ransomlab workload plan/run` | Plan or safely execute a controlled scenario |
+| `ransomlab capture validate` | Bind a complete, lossless raw capture to its plan and runtime manifest |
 | `ransomlab dataset build` | Label only manifest-tracked workload processes |
-| `ransomlab train/evaluate/report` | Train, assess, and export a reproducible local artifact |
+| `ransomlab train/evaluate/report` | Select without test data, evaluate the held-out test once, and export a report |
 
 ## Documentation
 
