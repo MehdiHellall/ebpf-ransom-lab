@@ -59,7 +59,7 @@ class CaptureValidationTests(unittest.TestCase):
         end_ns = int(EXPERIMENT_CAPTURE_SECONDS * 1_000_000_000)
         return (
             RunStart(self.run_id, 0, source="live"),
-            Event(self.run_id, 1, 1, self.identity, 42, "C", lost_events=event_loss),
+            Event(self.run_id, 1, 1, self.identity, 42, "C", result=3, lost_events=event_loss),
             ProcessExit(self.run_id, 2, int(EXPERIMENT_WORKLOAD_HOLD_SECONDS * 1_000_000_000), self.identity, 42),
             Heartbeat(self.run_id, 3, end_ns - 1, lost_events=heartbeat_loss),
             RunEnd(self.run_id, 4, end_ns, status=status, total_lost_events=end_loss),
@@ -92,12 +92,12 @@ class CaptureValidationTests(unittest.TestCase):
             self.records(end_loss=1),
             (
                 self.records()[0],
-                Event(self.run_id, 1, 1, self.identity, 42, "C", telemetry_quality="degraded"),
+                Event(self.run_id, 1, 1, self.identity, 42, "C", result=3, telemetry_quality="degraded"),
                 *self.records()[2:],
             ),
         )
         for records in cases:
-            with self.subTest(records=records), self.assertRaisesRegex(ValueError, "loss|degraded"):
+            with self.subTest(records=records), self.assertRaisesRegex(ValueError, "loss|lost|degraded"):
                 self.validate(records)
 
     def test_truncation_sequence_errors_and_missing_tracked_lifecycle_are_rejected(self):
@@ -106,8 +106,8 @@ class CaptureValidationTests(unittest.TestCase):
         cases = (
             valid[:-1],
             (valid[0], valid[2], valid[1], valid[3], valid[4]),
-            (valid[0], Event(self.run_id, 2, 1, self.identity, 42, "C"), *valid[2:]),
-            (RunStart(self.run_id, 0, "live"), Event(self.run_id, 1, 1, foreign, 99, "C"),
+            (valid[0], Event(self.run_id, 2, 1, self.identity, 42, "C", result=3), *valid[2:]),
+            (RunStart(self.run_id, 0, "live"), Event(self.run_id, 1, 1, foreign, 99, "C", result=3),
              ProcessExit(self.run_id, 2, 2, foreign, 99), valid[3], valid[4]),
         )
         for records in cases:

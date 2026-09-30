@@ -1,4 +1,4 @@
-"""Shared ten-second O/C/D window feature engine."""
+"""Shared ten-second successful O/C/D syscall feature engine."""
 
 from __future__ import annotations
 
@@ -25,6 +25,10 @@ SEQUENCE_NAMES = tuple("".join(sequence) for sequence in product(OPERATIONS, rep
 FEATURE_NAMES = tuple(f"{operation}_sum" for operation in OPERATIONS) + tuple(
     f"{operation}_max_1s" for operation in OPERATIONS
 ) + SEQUENCE_NAMES
+FEATURE_SEMANTICS = (
+    "successful open, create-intent, and delete syscalls per process in fixed "
+    "ten-second monotonic windows"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +155,11 @@ class WindowFeatureEngine:
         return tuple(emitted)
 
     def _add_event(self, event: Event) -> tuple[FeatureWindow, ...]:
+        # Valid collector streams always carry a syscall result. Failed
+        # operations are telemetry, but they are not completed file activity
+        # and therefore do not contribute to behavioral counts or sequences.
+        if event.result is not None and event.result < 0:
+            return ()
         start_ns = self._window_start(event.timestamp_ns)
         key = (event.process, start_ns)
         state = self._closed.get(key)

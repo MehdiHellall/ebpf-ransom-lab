@@ -15,11 +15,11 @@ class WindowFeatureTests(unittest.TestCase):
         self.p1 = ProcessIdentity("boot", 10, 100)
         self.p2 = ProcessIdentity("boot", 11, 200)
 
-    def event(self, seq, offset, operation, process=None, lost=0):
+    def event(self, seq, offset, operation, process=None, lost=0, result=0):
         process = process or self.p1
         return Event(
             "run", seq, self.origin + offset, process, process.tgid,
-            operation, lost_events=lost,
+            operation, result=result, lost_events=lost,
         )
 
     def values(self, window):
@@ -54,6 +54,19 @@ class WindowFeatureTests(unittest.TestCase):
         self.assertEqual(1, values["OCD"])
         self.assertEqual(1, values["CDO"])
         self.assertEqual(0, values["ODC"])
+
+    def test_failed_syscalls_do_not_contribute_to_behavior_features(self):
+        engine = WindowFeatureEngine(self.origin)
+        engine.feed((
+            self.event(1, 1, "C", result=-13),
+            self.event(2, 2, "D", result=-2),
+            self.event(3, 3, "O", result=4),
+        ))
+        window = engine.feed((Heartbeat("run", 4, self.origin + WINDOW_NS),))[0]
+        self.assertEqual((1, 0, 0), tuple(
+            window.feature_map[name] for name in ("O_sum", "C_sum", "D_sum")
+        ))
+        self.assertEqual(0, sum(window.feature_map[name] for name in SEQUENCE_NAMES))
 
     def test_sequences_do_not_cross_process_or_window_boundaries(self):
         engine = WindowFeatureEngine(self.origin)

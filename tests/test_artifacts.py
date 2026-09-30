@@ -35,8 +35,16 @@ class ArtifactTests(unittest.TestCase):
     def selection_samples(feature_name="D_sum"):
         return tuple(sample for sample in make_samples(feature_name) if sample.split != "test")
 
+    def train(self, feature_name="D_sum"):
+        return train_and_select(
+            self.selection_samples(feature_name),
+            random_seed=23,
+            experiment_dataset_manifest_sha256="c" * 64,
+            selection_dataset_sha256="d" * 64,
+        )
+
     def test_round_trip_preserves_scores_and_metadata(self):
-        result = train_and_select(self.selection_samples(), random_seed=23)
+        result = self.train()
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "model"
             save_artifact(target, result)
@@ -49,7 +57,7 @@ class ArtifactTests(unittest.TestCase):
             self.assertEqual(result.score((sample,))[0], loaded.score((sample,))[0])
 
     def test_rejects_tampered_or_incompatible_artifact(self):
-        result = train_and_select(self.selection_samples(), random_seed=23)
+        result = self.train()
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "model"
             save_artifact(target, result)
@@ -61,7 +69,7 @@ class ArtifactTests(unittest.TestCase):
                 load_artifact(target)
 
     def test_safe_skops_model_round_trip_and_checksum(self):
-        result = train_and_select(self.selection_samples("O_sum"), random_seed=23)
+        result = self.train("O_sum")
         self.assertEqual("rbf_svm", result.selected_name)
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "model"
@@ -74,7 +82,7 @@ class ArtifactTests(unittest.TestCase):
                 load_artifact(target)
 
     def test_held_out_evaluation_is_persisted_exactly_once(self):
-        result = train_and_select(self.selection_samples(), random_seed=23)
+        result = self.train()
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "model"
             save_artifact(target, result)
@@ -83,10 +91,48 @@ class ArtifactTests(unittest.TestCase):
                 "true_negatives": 1, "false_positives": 0,
                 "false_negatives": 0, "true_positives": 1,
             }
-            save_test_evaluation(target, dataset_sha256="a" * 64, metrics=metrics)
+            save_test_evaluation(
+                target,
+                dataset_sha256="a" * 64,
+                experiment_dataset_manifest_sha256="c" * 64,
+                metrics=metrics,
+            )
             self.assertEqual(1.0, load_test_evaluation(target)["metrics"]["f1"])
             with self.assertRaises(FileExistsError):
-                save_test_evaluation(target, dataset_sha256="a" * 64, metrics=metrics)
+                save_test_evaluation(
+                    target,
+                    dataset_sha256="a" * 64,
+                    experiment_dataset_manifest_sha256="c" * 64,
+                    metrics=metrics,
+                )
+
+    def test_rejects_unvalidated_claim_fields_and_inconsistent_metrics(self):
+        result = self.train()
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "model"
+            save_artifact(target, result)
+            manifest_path = target / "manifest.json"
+            original = json.loads(manifest_path.read_text(encoding="utf-8"))
+            cases = (
+                {**original, "unexpected": True},
+                {**original, "report_sections": {
+                    **original["report_sections"],
+                    "controlled_workloads": {
+                        **original["report_sections"]["controlled_workloads"],
+                        "selected_model": "random_forest",
+                    },
+                }},
+                {**original, "validation_metrics": {
+                    **original["validation_metrics"],
+                    "rule": {**original["validation_metrics"]["rule"], "f1": 0.123},
+                }},
+            )
+            for document in cases:
+                with self.subTest(document=document):
+                    manifest_path.write_text(json.dumps(document), encoding="utf-8")
+                    with self.assertRaises(ValueError):
+                        load_artifact(target)
+            manifest_path.write_text(json.dumps(original), encoding="utf-8")
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ from typing import Any, Mapping, TypeAlias
 
 
 CONTRACT_VERSION = 1
-FEATURE_VERSION = 1
+FEATURE_VERSION = 2
 OPERATIONS = ("O", "C", "D")
 TELEMETRY_QUALITIES = frozenset(("complete", "degraded"))
 

@@ -8,9 +8,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Mapping
 
-from ebpf_ransom_lab.contracts import Event, Heartbeat, ProcessExit, RunEnd, RunStart
+from ebpf_ransom_lab.contracts import Event, Heartbeat, ProcessExit
 from ebpf_ransom_lab.dataset import load_workload_manifest
 from ebpf_ransom_lab.recording import read_jsonl
+from ebpf_ransom_lab.stream import validate_stream
 from ebpf_ransom_lab.workloads import build_experiment_manifest
 
 
@@ -66,55 +67,19 @@ def validate_capture_file(
         raise ValueError("runtime manifest does not match its experiment-plan run")
 
     records = read_jsonl(capture)
-    start_indexes = [index for index, record in enumerate(records) if isinstance(record, RunStart)]
-    end_indexes = [index for index, record in enumerate(records) if isinstance(record, RunEnd)]
-    if start_indexes != [0]:
-        raise ValueError("capture must contain exactly one first run-start record")
-    if end_indexes != [len(records) - 1]:
-        raise ValueError("capture must contain exactly one final run-end record")
-
-    start = records[0]
-    end = records[-1]
-    assert isinstance(start, RunStart) and isinstance(end, RunEnd)
-    telemetry = records[1:-1]
-    if not telemetry or any(
-        not isinstance(record, (Event, Heartbeat, ProcessExit)) for record in telemetry
-    ):
+    validated = validate_stream(records)
+    start = validated.start
+    end = validated.end
+    telemetry = validated.records
+    if not telemetry:
         raise ValueError("capture contains invalid or empty telemetry")
     if start.source != "live" or start.run_id != manifest.run_id:
         raise ValueError("capture run start does not match the runtime manifest")
-    if end.run_id != manifest.run_id or end.status != "complete":
-        raise ValueError("capture does not have a successful terminal record")
-    if any(record.run_id != manifest.run_id for record in telemetry):
-        raise ValueError("capture telemetry run ID changed")
-
-    sequenced = (*telemetry, end)
-    sequences = tuple(record.collector_sequence for record in sequenced)
-    if sequences != tuple(range(1, len(sequenced) + 1)):
-        raise ValueError("capture collector sequence is not contiguous")
-    if any(
-        record.timestamp_ns < start.capture_start_ns or record.timestamp_ns > end.timestamp_ns
-        for record in sequenced
-    ):
-        raise ValueError("capture telemetry timestamp is outside the run boundary")
 
     planned_duration_ns = int(float(planned_run["capture_duration_seconds"]) * NSEC_PER_SECOND)
     duration_ns = end.timestamp_ns - start.capture_start_ns
     if not planned_duration_ns <= duration_ns <= planned_duration_ns + MAX_CAPTURE_OVERRUN_NS:
         raise ValueError("capture duration does not match the experiment plan")
-
-    deltas = sum(
-        record.lost_events for record in telemetry if isinstance(record, (Event, Heartbeat))
-    )
-    if deltas != end.total_lost_events:
-        raise ValueError("capture loss telemetry totals are inconsistent")
-    if end.total_lost_events:
-        raise ValueError("capture has event loss and is invalid for experiment data")
-    if any(
-        isinstance(record, Event) and record.telemetry_quality != "complete"
-        for record in telemetry
-    ):
-        raise ValueError("capture contains degraded telemetry")
 
     tracked = frozenset(manifest.tracked_processes)
     tracked_event_count = sum(

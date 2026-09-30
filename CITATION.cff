@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use this software or its controlled dataset, cite this repository."
+title: "eBPF Ransom Lab"
+type: software
+authors:
+  - family-names: Hellal
+    given-names: Mehdi
+repository-code: "https://github.com/MehdiHellall/ebpf-ransom-lab"
+license: MIT

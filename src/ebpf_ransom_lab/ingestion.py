@@ -5,10 +5,11 @@ import json
 from dataclasses import dataclass
 from typing import TextIO
 
-from ebpf_ransom_lab.contracts import Event, Heartbeat, ProcessExit, RunEnd, RunStart, record_from_dict
+from ebpf_ransom_lab.contracts import RunEnd, RunStart, record_from_dict
 from ebpf_ransom_lab.detection import RuleScorer
-from ebpf_ransom_lab.features import WindowFeatureEngine
+from ebpf_ransom_lab.replay import replay_records
 from ebpf_ransom_lab.storage import Store
+from ebpf_ransom_lab.stream import validate_stream
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,13 +23,13 @@ class IngestionSummary:
 def ingest_jsonl_stream(
     stream: TextIO, store: Store, *, capture_start_ns: int | None = None, threshold: float = 4.0,
 ) -> IngestionSummary:
-    """Consume one strict core JSONL stream and persist rule results incrementally."""
-    engine = None if capture_start_ns is None else WindowFeatureEngine(capture_start_ns)
+    """Validate a complete stream, then commit all derived state atomically."""
     scorer = RuleScorer(threshold)
-    run_id: str | None = None
-    last_timestamp = capture_start_ns or 0
-    records = windows = alerts = lost_events = 0
-    has_run_start = ended = False
+    materialized = []
+    lost_events = 0
+    telemetry_records = 0
+    observed_start_ns: int | None = None
+    last_timestamp_ns = 0
     try:
         for line_number, line in enumerate(stream, start=1):
             if not line.strip():
@@ -40,89 +41,42 @@ def ingest_jsonl_stream(
                 record = record_from_dict(raw)
             except (ValueError, json.JSONDecodeError) as error:
                 raise ValueError(f"invalid collector line {line_number}: {error}") from error
-            if ended:
-                raise ValueError(f"invalid collector line {line_number}: record follows run end")
-            if isinstance(record, RunStart):
-                if run_id is not None:
-                    raise ValueError(f"invalid collector line {line_number}: run start must be first")
-                if capture_start_ns is not None and capture_start_ns != record.capture_start_ns:
-                    raise ValueError(f"invalid collector line {line_number}: capture start disagrees with CLI")
-                capture_start_ns = record.capture_start_ns
-                engine = WindowFeatureEngine(capture_start_ns)
-                run_id = record.run_id
-                has_run_start = True
-                last_timestamp = capture_start_ns
-                store.upsert_run(run_id, source="live", started_ns=capture_start_ns, status="collecting")
-                continue
-            if isinstance(record, RunEnd):
-                if run_id is None or engine is None or capture_start_ns is None:
-                    raise ValueError(f"invalid collector line {line_number}: run end has no run start")
-                if record.run_id != run_id or record.status != "complete":
-                    raise ValueError(f"invalid collector line {line_number}: unsuccessful run end")
-                if record.total_lost_events != lost_events:
-                    raise ValueError(f"invalid collector line {line_number}: loss total mismatch")
-                added_windows, added_alerts = _persist(
-                    engine.finish(record.timestamp_ns), store, scorer
-                )
-                windows += added_windows
-                alerts += added_alerts
-                last_timestamp = record.timestamp_ns
-                ended = True
-                store.upsert_run(
-                    run_id, source="live", started_ns=capture_start_ns, status="complete"
-                )
-                store.update_health(
-                    connected=False, event_rate=0.0, lost_events=lost_events,
-                    recording=False, error=None,
-                )
-                continue
-            if not isinstance(record, (Event, Heartbeat, ProcessExit)):
-                raise ValueError(f"invalid collector line {line_number}: record is not a stream event")
-            if engine is None or capture_start_ns is None:
-                raise ValueError(f"invalid collector line {line_number}: missing run-start metadata")
-            if run_id is None:
-                run_id = record.run_id
-                store.upsert_run(run_id, source="live", started_ns=capture_start_ns, status="collecting")
-            elif record.run_id != run_id:
-                raise ValueError(f"invalid collector line {line_number}: run ID changed")
-            emitted = engine.feed((record,))
-            records += 1
-            last_timestamp = max(last_timestamp, record.timestamp_ns)
+            materialized.append(record)
             lost_events += getattr(record, "lost_events", 0)
-            added_windows, added_alerts = _persist(emitted, store, scorer)
-            windows += added_windows
-            alerts += added_alerts
-            elapsed = max(1, last_timestamp - capture_start_ns)
-            store.update_health(
-                connected=True, event_rate=records * 1_000_000_000 / elapsed,
-                lost_events=lost_events, recording=True, error=None,
-            )
-        if run_id is None or engine is None or capture_start_ns is None:
-            raise ValueError("collector stream contains no records")
-        if has_run_start and not ended:
-            raise ValueError("collector stream is missing its terminal run-end record")
-        if not ended:
-            added_windows, added_alerts = _persist(engine.finish(last_timestamp), store, scorer)
-            windows += added_windows
-            alerts += added_alerts
-            store.upsert_run(run_id, source="live", started_ns=capture_start_ns, status="complete")
-            store.update_health(
-                connected=False, event_rate=0.0, lost_events=lost_events,
-                recording=False, error=None,
-            )
-        return IngestionSummary(run_id, records, windows, alerts)
+            if isinstance(record, RunStart) and len(materialized) == 1:
+                observed_start_ns = record.capture_start_ns
+                last_timestamp_ns = observed_start_ns
+            elif observed_start_ns is not None and not isinstance(record, RunEnd):
+                telemetry_records += 1
+                last_timestamp_ns = max(
+                    last_timestamp_ns, getattr(record, "timestamp_ns", last_timestamp_ns)
+                )
+                elapsed = max(1, last_timestamp_ns - observed_start_ns)
+                store.update_health(
+                    connected=True,
+                    event_rate=telemetry_records * 1_000_000_000 / elapsed,
+                    lost_events=lost_events,
+                    recording=True,
+                    error=None,
+                )
+        validated = validate_stream(materialized, capture_start_ns=capture_start_ns)
+        windows = replay_records(materialized, capture_start_ns=capture_start_ns)
+        predictions = tuple(scorer.predict(window) for window in windows)
+        store.replace_run_analysis(
+            validated.start.run_id,
+            source=validated.start.source,
+            started_ns=validated.start.capture_start_ns,
+            windows=windows,
+            predictions=predictions,
+        )
+        alerts = sum(prediction.suspicious is True for prediction in predictions)
+        store.update_health(
+            connected=False, event_rate=0.0,
+            lost_events=validated.total_lost_events, recording=False, error=None,
+        )
+        return IngestionSummary(
+            validated.start.run_id, len(validated.records), len(windows), alerts
+        )
     except Exception as error:
         store.update_health(connected=False, event_rate=0.0, lost_events=lost_events, recording=False, error=str(error))
         raise
-
-
-def _persist(windows, store: Store, scorer: RuleScorer) -> tuple[int, int]:
-    alerts = 0
-    for window in windows:
-        prediction = scorer.predict(window)
-        store.upsert_window(window)
-        store.upsert_prediction(prediction)
-        if prediction.suspicious:
-            store.create_alert(prediction, window)
-            alerts += 1
-    return len(windows), alerts

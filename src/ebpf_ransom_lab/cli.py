@@ -22,6 +22,7 @@ from ebpf_ransom_lab.collector.runtime import MAX_QUEUE_LIMIT, RUN_ID_PATTERN
 from ebpf_ransom_lab.audit import audit_checkout, write_report
 from ebpf_ransom_lab.artifacts import (
     load_artifact,
+    load_artifact_metadata,
     load_test_evaluation,
     save_artifact,
     save_test_evaluation,
@@ -29,14 +30,15 @@ from ebpf_ransom_lab.artifacts import (
 from ebpf_ransom_lab.capture import validate_capture_file, write_capture_acceptance
 from ebpf_ransom_lab.detection import RuleScorer
 from ebpf_ransom_lab.dataset import (
+    assemble_experiment_dataset,
     build_labeled_windows,
+    load_manifest_bound_dataset,
     load_workload_manifest,
     read_feature_windows,
     write_labeled_windows,
 )
 from ebpf_ransom_lab.modeling import (
     evaluate_loaded_artifact,
-    load_dataset,
     train_and_select,
 )
 from ebpf_ransom_lab.reference import load_manifest, verify_reference
@@ -44,6 +46,7 @@ from ebpf_ransom_lab.recording import read_jsonl, write_jsonl
 from ebpf_ransom_lab.replay import replay_records
 from ebpf_ransom_lab.service import create_app
 from ebpf_ransom_lab.storage import Store
+from ebpf_ransom_lab.stream import validate_stream
 from ebpf_ransom_lab.workloads import (
     RUN_SEEDS,
     WorkloadLimits,
@@ -147,15 +150,23 @@ def build_parser() -> argparse.ArgumentParser:
     dataset_build.add_argument("--capture", type=Path, required=True)
     dataset_build.add_argument("--plan", type=Path, required=True)
     dataset_build.add_argument("--output", type=Path, required=True)
+    dataset_assemble = dataset_commands.add_parser(
+        "assemble", help="assemble and bind all 40 planned per-run datasets"
+    )
+    dataset_assemble.add_argument("inputs", type=Path)
+    dataset_assemble.add_argument("--plan", type=Path, required=True)
+    dataset_assemble.add_argument("--output", type=Path, required=True)
 
     train = subcommands.add_parser("train", help="train and select a controlled-workload model")
     train.add_argument("dataset", type=Path)
+    train.add_argument("--manifest", type=Path, required=True)
     train.add_argument("--output", type=Path, required=True)
     train.add_argument("--seed", type=int, default=37)
 
     evaluate = subcommands.add_parser("evaluate", help="evaluate a saved artifact without refitting")
     evaluate.add_argument("artifact", type=Path)
     evaluate.add_argument("dataset", type=Path)
+    evaluate.add_argument("--manifest", type=Path, required=True)
 
     report = subcommands.add_parser("report", help="export the reproducibility section of a model artifact")
     report.add_argument("artifact", type=Path)
@@ -252,30 +263,32 @@ def _features(arguments: argparse.Namespace, stdout: TextIO) -> int:
 def _replay(arguments: argparse.Namespace, stdout: TextIO) -> int:
     try:
         records = read_jsonl(arguments.recording)
-        capture_start = (
-            arguments.capture_start_ns
-            if arguments.capture_start_ns is not None
-            else _recorded_capture_start(records)
+        validated = validate_stream(
+            records,
+            capture_start_ns=arguments.capture_start_ns,
+            capture_end_ns=arguments.capture_end_ns,
         )
         windows = replay_records(
             records,
-            capture_start_ns=capture_start,
+            capture_start_ns=arguments.capture_start_ns,
             capture_end_ns=arguments.capture_end_ns,
         )
-        run_id = _run_id(records)
         store = Store(arguments.database)
         store.initialize()
-        store.upsert_run(run_id, source="replay", started_ns=capture_start, status="complete")
         scorer = RuleScorer(arguments.threshold)
-        alerts = 0
-        for window in windows:
-            prediction = scorer.predict(window)
-            store.upsert_window(window)
-            store.upsert_prediction(prediction)
-            if prediction.suspicious:
-                store.create_alert(prediction, window)
-                alerts += 1
-        store.update_health(connected=False, event_rate=0.0, lost_events=0, recording=False, error=None)
+        predictions = tuple(scorer.predict(window) for window in windows)
+        store.replace_run_analysis(
+            validated.start.run_id,
+            source="replay",
+            started_ns=validated.start.capture_start_ns,
+            windows=windows,
+            predictions=predictions,
+        )
+        alerts = sum(prediction.suspicious is True for prediction in predictions)
+        store.update_health(
+            connected=False, event_rate=0.0,
+            lost_events=validated.total_lost_events, recording=False, error=None,
+        )
     except (OSError, RuntimeError, ValueError) as error:
         print(f"Replay error: {error}", file=stdout)
         return 2
@@ -294,6 +307,8 @@ def _serve(arguments: argparse.Namespace, stdout: TextIO) -> int:
     # the documented localhost SSH tunnel rather than exposed on the network.
     import uvicorn
 
+    # Initialize SQLite before a background consumer can open a connection.
+    app = create_app(arguments.database)
     source = None
     if arguments.input is not None:
         try:
@@ -316,7 +331,7 @@ def _serve(arguments: argparse.Namespace, stdout: TextIO) -> int:
         threading.Thread(target=consume, name="ransomlab-ingestion", daemon=True).start()
 
     print(f"Dashboard: http://127.0.0.1:{arguments.port}", file=stdout)
-    uvicorn.run(create_app(arguments.database), host="127.0.0.1", port=arguments.port)
+    uvicorn.run(app, host="127.0.0.1", port=arguments.port)
     return 0
 
 
@@ -468,6 +483,16 @@ def _capture(arguments: argparse.Namespace, stdout: TextIO) -> int:
 
 def _dataset(arguments: argparse.Namespace, stdout: TextIO) -> int:
     try:
+        if arguments.dataset_command == "assemble":
+            manifest = assemble_experiment_dataset(
+                arguments.inputs, arguments.plan, arguments.output
+            )
+            print(
+                f"Aggregate dataset complete: {manifest['row_count']} rows, "
+                f"{manifest['expected_run_count']} runs -> {arguments.output}",
+                file=stdout,
+            )
+            return 0
         acceptance = validate_capture_file(
             arguments.capture, arguments.manifest, arguments.plan
         )
@@ -491,9 +516,15 @@ def _dataset(arguments: argparse.Namespace, stdout: TextIO) -> int:
 
 def _train(arguments: argparse.Namespace, stdout: TextIO) -> int:
     try:
-        with arguments.dataset.open(encoding="utf-8") as stream:
-            samples = load_dataset(stream)
-        result = train_and_select(samples, random_seed=arguments.seed)
+        samples, manifest_sha256 = load_manifest_bound_dataset(
+            arguments.dataset, arguments.manifest, role="selection"
+        )
+        result = train_and_select(
+            samples,
+            random_seed=arguments.seed,
+            experiment_dataset_manifest_sha256=manifest_sha256,
+            selection_dataset_sha256=_sha256_file(arguments.dataset),
+        )
         save_artifact(arguments.output, result)
     except (OSError, RuntimeError, ValueError, FileExistsError) as error:
         print(f"Train error: {error}", file=stdout)
@@ -508,14 +539,16 @@ def _train(arguments: argparse.Namespace, stdout: TextIO) -> int:
 def _evaluate(arguments: argparse.Namespace, stdout: TextIO) -> int:
     try:
         artifact = load_artifact(arguments.artifact)
-        with arguments.dataset.open(encoding="utf-8") as stream:
-            samples = load_dataset(stream)
-        if any(sample.split != "test" for sample in samples):
-            raise ValueError("held-out evaluation input must contain only test rows")
+        samples, manifest_sha256 = load_manifest_bound_dataset(
+            arguments.dataset, arguments.manifest, role="test"
+        )
+        if manifest_sha256 != artifact.experiment_dataset_manifest_sha256:
+            raise ValueError("test dataset manifest does not match the selected artifact")
         metrics = evaluate_loaded_artifact(artifact, samples)
         save_test_evaluation(
             arguments.artifact,
             dataset_sha256=_sha256_file(arguments.dataset),
+            experiment_dataset_manifest_sha256=manifest_sha256,
             metrics=metrics,
         )
     except (OSError, RuntimeError, ValueError, FileExistsError) as error:
@@ -529,8 +562,7 @@ def _report(arguments: argparse.Namespace, stdout: TextIO) -> int:
     try:
         # Validate the artifact before exporting any of its user-visible claims.
         load_artifact(arguments.artifact)
-        source = arguments.artifact / "manifest.json"
-        manifest = json.loads(source.read_text(encoding="utf-8"))
+        manifest = load_artifact_metadata(arguments.artifact)
         if arguments.output.exists():
             raise FileExistsError(f"refusing to overwrite {arguments.output}")
         evaluation = load_test_evaluation(arguments.artifact)
@@ -542,9 +574,14 @@ def _report(arguments: argparse.Namespace, stdout: TextIO) -> int:
             "artifact_version": manifest["artifact_version"],
             "model": manifest["model_name"],
             "selection_manifest_hash": manifest["selection_manifest_hash"],
+            "experiment_dataset_manifest_sha256": manifest[
+                "experiment_dataset_manifest_sha256"
+            ],
+            "selection_dataset_sha256": manifest["selection_dataset_sha256"],
             "validation_metrics": manifest["validation_metrics"],
             "test_metrics": evaluation["metrics"],
             "test_dataset_sha256": evaluation["dataset_sha256"],
+            "artifact_manifest_sha256": evaluation["artifact_manifest_sha256"],
             "report_sections": sections,
         }
         arguments.output.parent.mkdir(parents=True, exist_ok=True)
@@ -554,21 +591,6 @@ def _report(arguments: argparse.Namespace, stdout: TextIO) -> int:
         return 2
     print(f"Report exported: {arguments.output}", file=stdout)
     return 0
-
-
-def _run_id(records: Sequence[object]) -> str:
-    run_ids = {getattr(record, "run_id", None) for record in records}
-    run_ids.discard(None)
-    if len(run_ids) != 1:
-        raise ValueError("recording must contain exactly one run ID")
-    return next(iter(run_ids))
-
-
-def _recorded_capture_start(records: Sequence[object]) -> int | None:
-    starts = tuple(record.capture_start_ns for record in records if isinstance(record, RunStart))
-    if len(starts) > 1:
-        raise ValueError("recording has multiple run-start records")
-    return starts[0] if starts else None
 
 
 def _workload_payload(result: object) -> dict[str, object]:

@@ -22,13 +22,18 @@ class ReplayTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.origin = 1_000_000_000
         process = ProcessIdentity("boot", 7, 50)
+        self.telemetry = (
+            Event("run", 1, self.origin, process, 7, "O", result=3),
+            Event("run", 2, self.origin + 1, process, 7, "C", result=4),
+            Heartbeat("run", 3, self.origin + WINDOW_NS),
+            Event("run", 4, self.origin + 2, process, 7, "D", result=0),
+            Event("run", 5, self.origin + WINDOW_NS, process, 7, "O", result=5),
+            Heartbeat("run", 6, self.origin + 2 * WINDOW_NS),
+        )
         self.records = (
-            Event("run", 0, self.origin, process, 7, "O"),
-            Event("run", 1, self.origin + 1, process, 7, "C"),
-            Heartbeat("run", 2, self.origin + WINDOW_NS),
-            Event("run", 3, self.origin + 2, process, 7, "D"),
-            Event("run", 4, self.origin + WINDOW_NS, process, 7, "O"),
-            Heartbeat("run", 5, self.origin + 2 * WINDOW_NS),
+            RunStart("run", self.origin, source="replay"),
+            *self.telemetry,
+            RunEnd("run", 7, self.origin + 2 * WINDOW_NS),
         )
 
     def test_jsonl_round_trip_and_trailing_newline(self):
@@ -108,38 +113,51 @@ class ReplayTests(unittest.TestCase):
                 self.assertIn(f":{line}:", str(raised.exception))
                 self.assertIn(reason, str(raised.exception))
 
-    def test_replay_always_needs_explicit_capture_start(self):
-        self.assertEqual((), replay_records((), capture_start_ns=self.origin))
-        with self.assertRaisesRegex(ValueError, "capture_start_ns"):
+    def test_replay_always_needs_a_complete_stream_envelope(self):
+        with self.assertRaisesRegex(ValueError, "run-start"):
+            replay_records((), capture_start_ns=self.origin)
+        with self.assertRaisesRegex(ValueError, "run-start"):
             replay_records(())
-        with self.assertRaisesRegex(ValueError, "capture_start_ns"):
-            replay_records(self.records)
+        with self.assertRaisesRegex(ValueError, "run-start"):
+            replay_records(self.telemetry, capture_start_ns=self.origin)
 
     def test_recorded_run_start_is_a_reproducible_capture_alignment(self):
-        aligned = (RunStart("run", self.origin, source="live"), *self.records)
-        self.assertEqual(
-            replay_records(self.records, capture_start_ns=self.origin),
-            replay_records(aligned),
-        )
+        self.assertEqual(replay_records(self.records), replay_records(
+            self.records, capture_start_ns=self.origin
+        ))
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            replay_records(self.records, capture_start_ns=self.origin + 1)
 
     def test_terminal_run_end_supplies_capture_end_without_becoming_a_feature_record(self):
-        complete = (
-            RunStart("run", self.origin, source="live"),
-            *self.records,
-            RunEnd("run", 6, self.origin + 2 * WINDOW_NS, status="complete"),
-        )
-        self.assertEqual(
-            replay_records(self.records, capture_start_ns=self.origin),
-            replay_records(complete),
-        )
-
+        complete = self.records
         invalid = (
             (*complete, complete[-1]),
             (complete[-1], *complete[:-1]),
-            (*complete[:-1], RunEnd("other", 6, self.origin + 2 * WINDOW_NS)),
+            (*complete[:-1], RunEnd("other", 7, self.origin + 2 * WINDOW_NS)),
         )
         for records in invalid:
             with self.subTest(records=records), self.assertRaises(ValueError):
+                replay_records(records)
+
+    def test_replay_rejects_loss_degraded_events_and_sequence_gaps(self):
+        base = self.records
+        lossy = (
+            base[0],
+            Event("run", 1, self.origin, base[1].process, 7, "O", result=3, lost_events=1),
+            *base[2:-1],
+            RunEnd("run", 7, self.origin + 2 * WINDOW_NS, total_lost_events=1),
+        )
+        degraded = (
+            base[0],
+            Event(
+                "run", 1, self.origin, base[1].process, 7, "O", result=3,
+                telemetry_quality="degraded",
+            ),
+            *base[2:],
+        )
+        gap = (base[0], base[1], *base[3:])
+        for records, reason in ((lossy, "lost"), (degraded, "degraded"), (gap, "sequence")):
+            with self.subTest(reason=reason), self.assertRaisesRegex(ValueError, reason):
                 replay_records(records)
 
 

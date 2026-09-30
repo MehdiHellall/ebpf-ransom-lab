@@ -12,6 +12,7 @@ from typing import Iterable
 
 
 MINIMUM_PYTHON = (3, 12)
+MAXIMUM_PYTHON_EXCLUSIVE = (3, 13)
 MINIMUM_FREE_BYTES = 5 * 1024**3
 MINIMUM_RING_BUFFER_KERNEL = (5, 8)
 TRACEPOINT_NAMES = (
@@ -126,11 +127,16 @@ def overall_status(checks: Iterable[CheckResult]) -> Status:
 
 
 def _application_checks(context: DoctorContext) -> tuple[CheckResult, ...]:
-    python_ok = context.python_version[:2] >= MINIMUM_PYTHON
+    python_ok = (
+        MINIMUM_PYTHON
+        <= context.python_version[:2]
+        < MAXIMUM_PYTHON_EXCLUSIVE
+    )
     python_status = Status.PASS if python_ok else Status.FAIL
     python_message = (
         f"Python {'.'.join(map(str, context.python_version))}; "
-        f"requires {MINIMUM_PYTHON[0]}.{MINIMUM_PYTHON[1]} or newer"
+        f"requires >= {MINIMUM_PYTHON[0]}.{MINIMUM_PYTHON[1]} and "
+        f"< {MAXIMUM_PYTHON_EXCLUSIVE[0]}.{MAXIMUM_PYTHON_EXCLUSIVE[1]}"
     )
 
     storage_status = (

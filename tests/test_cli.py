@@ -14,6 +14,7 @@ from ebpf_ransom_lab.recording import read_jsonl, write_jsonl
 from ebpf_ransom_lab.doctor import DoctorContext
 from ebpf_ransom_lab.collector.protocol import CollectorHealth, LossCounters
 from ebpf_ransom_lab.reference import FileVerification, VerificationReport
+from ebpf_ransom_lab.storage import Store
 from ebpf_ransom_lab.workloads import (
     EXPERIMENT_WORKLOAD_HOLD_SECONDS,
     MAX_WORKLOAD_BYTES,
@@ -147,9 +148,11 @@ class CliTests(unittest.TestCase):
     def test_features_and_replay_drive_the_portable_dashboard_database(self):
         identity = ProcessIdentity("boot", 9, 10)
         records = (
-            Event("demo", 1, 0, identity, 9, "C"),
-            Event("demo", 2, 1, identity, 9, "D"),
+            RunStart("demo", 0, "replay"),
+            Event("demo", 1, 0, identity, 9, "C", result=3),
+            Event("demo", 2, 1, identity, 9, "D", result=0),
             Heartbeat("demo", 3, WINDOW_NS),
+            RunEnd("demo", 4, WINDOW_NS),
         )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -174,8 +177,10 @@ class CliTests(unittest.TestCase):
     def test_features_refuses_to_overwrite_existing_output(self):
         identity = ProcessIdentity("boot", 9, 10)
         records = (
-            Event("demo", 1, 0, identity, 9, "C"),
+            RunStart("demo", 0, "replay"),
+            Event("demo", 1, 0, identity, 9, "C", result=3),
             Heartbeat("demo", 2, WINDOW_NS),
+            RunEnd("demo", 3, WINDOW_NS),
         )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -206,7 +211,7 @@ class CliTests(unittest.TestCase):
         identity = ProcessIdentity("boot", 9, 10)
         records = (
             RunStart("controlled-copying-seed-11", 0, "live"),
-            Event("controlled-copying-seed-11", 1, 1, identity, 9, "C"),
+            Event("controlled-copying-seed-11", 1, 1, identity, 9, "C", result=3),
             Heartbeat("controlled-copying-seed-11", 2, WINDOW_NS),
             ProcessExit("controlled-copying-seed-11", 3, 50 * 1_000_000_000, identity, 9),
             Heartbeat("controlled-copying-seed-11", 4, 60 * 1_000_000_000 - 1),
@@ -274,6 +279,40 @@ class CliTests(unittest.TestCase):
             self.assertEqual(2, run(["collect", "--run-id", "demo"], stdout=output))
         self.assertEqual("", output.getvalue())
 
+    def test_serve_initializes_database_before_starting_ingestion(self):
+        events = []
+
+        class ImmediateThread:
+            def __init__(self, *, target, name, daemon):
+                self.target = target
+
+            def start(self):
+                events.append("thread")
+                self.target()
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "runs.sqlite"
+            recording = root / "stream.jsonl"
+            write_jsonl(recording, (
+                RunStart("serve-run", 0, "live"),
+                RunEnd("serve-run", 1, 1),
+            ))
+
+            def initialize_app(path):
+                events.append("app")
+                Store(path).initialize()
+                return object()
+
+            with patch("ebpf_ransom_lab.cli.create_app", side_effect=initialize_app), \
+                 patch("ebpf_ransom_lab.cli.threading.Thread", ImmediateThread), \
+                 patch("uvicorn.run", side_effect=lambda *args, **kwargs: events.append("server")):
+                self.assertEqual(0, run([
+                    "serve", "--database", str(database), "--input", str(recording),
+                ], stdout=io.StringIO()))
+
+        self.assertEqual(["app", "thread", "server"], events)
+
     def test_collect_rejects_unsafe_run_id_before_starting_collector(self):
         output = io.StringIO()
         stderr = io.StringIO()
@@ -337,23 +376,39 @@ class CliTests(unittest.TestCase):
             root = Path(directory)
             dataset = root / "dataset.jsonl"
             dataset.write_text("{}\n", encoding="utf-8")
+            manifest = root / "manifest.json"
+            manifest.write_text("{}\n", encoding="utf-8")
             output = io.StringIO()
-            with patch("ebpf_ransom_lab.cli.load_dataset", return_value=(object(),)), \
+            with patch(
+                "ebpf_ransom_lab.cli.load_manifest_bound_dataset",
+                return_value=((object(),), "a" * 64),
+            ), \
                  patch("ebpf_ransom_lab.cli.train_and_select") as trainer, \
                  patch("ebpf_ransom_lab.cli.save_artifact") as saver:
                 trainer.return_value = type("Result", (), {
                     "selected_name": "rule", "threshold": 4.0,
                     "test_metrics": {"f1": 1.0},
                 })()
-                self.assertEqual(0, run(["train", str(dataset), "--output", str(root / "artifact")], stdout=output))
+                self.assertEqual(0, run([
+                    "train", str(dataset), "--manifest", str(manifest),
+                    "--output", str(root / "artifact"),
+                ], stdout=output))
                 saver.assert_called_once()
 
             with patch("ebpf_ransom_lab.cli.load_artifact") as loader, \
-                 patch("ebpf_ransom_lab.cli.load_dataset", return_value=()), \
+                 patch(
+                     "ebpf_ransom_lab.cli.load_manifest_bound_dataset",
+                     return_value=((), "a" * 64),
+                 ), \
                  patch("ebpf_ransom_lab.cli.evaluate_loaded_artifact", return_value={"f1": 1.0}), \
                  patch("ebpf_ransom_lab.cli.save_test_evaluation"):
-                loader.return_value = object()
-                self.assertEqual(0, run(["evaluate", str(root / "artifact"), str(dataset)], stdout=output))
+                loader.return_value = type("Artifact", (), {
+                    "experiment_dataset_manifest_sha256": "a" * 64,
+                })()
+                self.assertEqual(0, run([
+                    "evaluate", str(root / "artifact"), str(dataset),
+                    "--manifest", str(manifest),
+                ], stdout=output))
             self.assertIn("f1", output.getvalue())
 
     def test_report_combines_selection_metadata_with_the_one_test_evaluation(self):
@@ -361,20 +416,25 @@ class CliTests(unittest.TestCase):
             root = Path(directory)
             artifact = root / "artifact"
             artifact.mkdir()
-            (artifact / "manifest.json").write_text(json.dumps({
-                "artifact_version": "model-artifact-v2",
+            metadata = {
+                "artifact_version": "model-artifact-v3",
                 "model_name": "rule",
                 "selection_manifest_hash": "a" * 64,
+                "experiment_dataset_manifest_sha256": "c" * 64,
+                "selection_dataset_sha256": "d" * 64,
                 "validation_metrics": {"rule": {"f1": 1.0}},
                 "report_sections": {
                     "controlled_workloads": {"status": "selected_not_tested"},
                     "published_data": {"status": "blocked_label_provenance"},
                 },
-            }), encoding="utf-8")
+            }
             output_path = root / "report.json"
             with patch("ebpf_ransom_lab.cli.load_artifact"), \
+                 patch("ebpf_ransom_lab.cli.load_artifact_metadata", return_value=metadata), \
                  patch("ebpf_ransom_lab.cli.load_test_evaluation", return_value={
                      "dataset_sha256": "b" * 64,
+                     "experiment_dataset_manifest_sha256": "c" * 64,
+                     "artifact_manifest_sha256": "e" * 64,
                      "metrics": {"f1": 1.0},
                  }):
                 self.assertEqual(0, run([

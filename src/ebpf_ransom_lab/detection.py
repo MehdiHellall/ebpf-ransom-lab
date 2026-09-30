@@ -8,7 +8,7 @@ from ebpf_ransom_lab.contracts import FeatureWindow
 from ebpf_ransom_lab.features import FEATURE_NAMES
 
 
-RULE_VERSION = "rule-count-rate-v1"
+RULE_VERSION = "rule-success-count-rate-v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,7 +24,7 @@ class Prediction:
 
 @dataclass(frozen=True, slots=True)
 class RuleScorer:
-    """Score create/delete attempts per second in a ten-second window."""
+    """Score successful create-intent/delete syscalls per second."""
 
     threshold: float = 4.0
     model_version: str = RULE_VERSION

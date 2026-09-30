@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from ebpf_ransom_lab.contracts import FeatureWindow, ProcessIdentity
 from ebpf_ransom_lab.detection import RuleScorer
@@ -50,6 +51,48 @@ class StoreTests(unittest.TestCase):
         )
         with self.assertRaises(Exception):
             self.store.upsert_window(orphan)
+
+    def test_negative_rescore_invalidates_and_positive_rescore_reactivates_alert(self):
+        positive = RuleScorer(threshold=4.0).predict(self.window)
+        self.store.upsert_window(self.window)
+        self.store.upsert_prediction(positive)
+        self.store.create_alert(positive, self.window)
+        self.assertEqual(1, self.store.metrics()["active_alerts"])
+
+        negative = RuleScorer(threshold=100.0).predict(self.window)
+        self.store.upsert_prediction(negative)
+        self.assertEqual(0, self.store.metrics()["active_alerts"])
+
+        self.store.upsert_prediction(positive)
+        self.store.create_alert(positive, self.window)
+        self.assertEqual(1, self.store.metrics()["active_alerts"])
+        self.assertTrue(self.store.list_alerts(limit=10, offset=0)[0]["valid"])
+
+    def test_run_analysis_rolls_back_as_one_transaction(self):
+        prediction = RuleScorer(threshold=4.0).predict(self.window)
+        self.store.replace_run_analysis(
+            "run-1",
+            source="replay",
+            started_ns=0,
+            windows=(self.window,),
+            predictions=(prediction,),
+        )
+        with patch(
+            "ebpf_ransom_lab.storage._upsert_prediction",
+            side_effect=RuntimeError("forced write failure"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "forced write failure"):
+                self.store.replace_run_analysis(
+                    "run-1",
+                    source="replay",
+                    started_ns=1,
+                    windows=(self.window,),
+                    predictions=(prediction,),
+                )
+
+        self.assertEqual(1, self.store.metrics()["windows"])
+        self.assertEqual(1, self.store.metrics()["active_alerts"])
+        self.assertEqual("0", self.store.list_runs(limit=1, offset=0)[0]["started_ns"])
 
 
 if __name__ == "__main__":

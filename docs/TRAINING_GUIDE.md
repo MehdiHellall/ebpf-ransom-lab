@@ -1,135 +1,265 @@
-# Controlled-workload training guide
+# Controlled experiment runbook
 
-This guide is the handoff from the portable implementation to the Ubuntu 24.04
-VM. It creates evidence for a suspicious-behavior demonstration; it does not
-validate protection against real ransomware.
+This runbook starts at a clean Ubuntu 24.04 VM and ends with a report tied to
+all 40 planned captures. Run collector commands with `sudo`; run workloads,
+dataset tools, training, and the dashboard as the ordinary lab user.
 
-## Before capturing
+## 1. Freeze the revision
 
-Run these from the project checkout on the VM's Linux filesystem:
+Use one reviewed commit for the complete experiment. Do not change source,
+dependencies, workload plans, or feature code between captures.
 
 ```bash
-.venv/bin/ransomlab doctor --scope app
-sudo .venv/bin/ransomlab doctor --scope collector
-.venv/bin/python -m coverage run -m unittest discover -s tests -v
-.venv/bin/python -m coverage report
-.venv/bin/ransomlab workload plan --output var/controlled-workloads.json
+cd ~/ebpf-ransom-lab
+git status --short
+git rev-parse HEAD
 ```
 
-The plan contains exactly 40 independent captures: eight scenarios by the five
-fixed seeds. Use `11`, `23`, and `37` only for training; `41` only for
-validation; and `53` only for the final test. Do not change the split after
-viewing features or model results.
+Record the commit ID. The working tree should be empty before continuing.
 
-## Capture one run
+## 2. Build the Ubuntu environment
 
-Use a disposable VM and an ordinary user for every command except the
-collector. The fixed `--hold-seconds 50` keeps the tracked process alive long
-enough to yield complete ten-second windows, then leaves time for the collector
-to record its exact exit before the 60-second terminal record.
-
-Create output directories once, then pipe the privileged collector directly
-into the ordinary-user dashboard consumer. Run this command once from the VM
-shell:
+Install the pinned Python dependencies and Ubuntu BCC packages:
 
 ```bash
-mkdir -p var/captures var/features var/datasets var/artifacts var/reports
+scripts/bootstrap_ubuntu.sh
 ```
 
+The Python lock uses SHA-256 hashes. The bootstrap records the kernel, Python,
+APT, and Python package versions in `var/lab_versions.txt`.
+
+Authorize `sudo` for the upcoming non-interactive collector command, then run
+the portable and live integration gate:
+
 ```bash
-sudo .venv/bin/ransomlab collect --run-id controlled-copying-seed-11 --duration-seconds 60 |
-  .venv/bin/ransomlab serve --input - --database var/live.sqlite
+sudo -v
+scripts/ubuntu_bcc_gate.sh
 ```
 
-For a durable capture used for training, redirect the collector to a file,
-then use the same file for replay/features. The collector writes a `run_start`
-record, so the capture-aligned time origin travels with the recording.
+Do not start the experiment unless this ends with:
+
+```text
+Ubuntu/BCC integration gate passed.
+```
+
+If the gate fails, keep its output and fix the VM or collector first. A failed
+gate is not a usable experiment run.
+
+## 3. Create and freeze the 40-run plan
 
 ```bash
-capture=var/captures/controlled-copying-seed-11.jsonl
-sudo .venv/bin/ransomlab collect --run-id controlled-copying-seed-11 --duration-seconds 60 \
-  > "$capture" &
-collector_pid=$!
-for _ in $(seq 1 100); do test -s "$capture" && break; sleep 0.1; done
-test -s "$capture" || { wait "$collector_pid"; exit 1; }
-.venv/bin/ransomlab workload run copying --seed 11 --hold-seconds 50 \
-  --manifest var/captures/controlled-copying-seed-11.manifest.json
-wait "$collector_pid"
-.venv/bin/ransomlab capture validate "$capture" \
-  var/captures/controlled-copying-seed-11.manifest.json \
+mkdir -p var/captures var/features var/datasets/runs var/artifacts var/reports
+.venv/bin/ransomlab workload plan \
+  --output var/controlled-workloads.json
+sha256sum var/controlled-workloads.json | tee var/controlled-workloads.sha256
+```
+
+The plan has eight scenarios and five preassigned seeds:
+
+| Split | Seeds | Runs |
+|---|---|---:|
+| Training | `11`, `23`, `37` | 24 |
+| Validation | `41` | 8 |
+| Test | `53` | 8 |
+
+Do not regenerate the plan after collection starts.
+
+## 4. Check one capture before the full run
+
+Refresh `sudo`, then collect the first run:
+
+```bash
+sudo -v
+scripts/capture_controlled_run.sh copying 11
+```
+
+The script performs the complete per-run transaction:
+
+1. Starts a 60-second root BCC capture.
+2. Waits for the `RunStart` record.
+3. Runs the bounded workload as the ordinary user with a 50-second hold.
+4. Waits for the terminal collector record.
+5. Rejects sequence gaps, missing syscall results, degraded telemetry, any
+   reported loss, a missing process exit, or a plan mismatch.
+6. Recomputes feature windows from the accepted raw capture.
+7. Writes only classifiable windows for the exact workload process.
+
+Inspect the acceptance record:
+
+```bash
+.venv/bin/python -m json.tool \
+  var/captures/controlled-copying-seed-11.accepted.json
+```
+
+Confirm that `status` is `accepted` and `total_lost_events` is `0`.
+
+The five files for this run are:
+
+```text
+var/captures/controlled-copying-seed-11.jsonl
+var/captures/controlled-copying-seed-11.manifest.json
+var/captures/controlled-copying-seed-11.accepted.json
+var/features/controlled-copying-seed-11.jsonl
+var/datasets/runs/controlled-copying-seed-11.jsonl
+```
+
+## 5. Execute all 40 captures
+
+The first run already exists, so run the other seeds for `copying`, followed by
+all seeds for the remaining scenarios:
+
+```bash
+set -euo pipefail
+
+for seed in 23 37 41 53; do
+  sudo -v
+  scripts/capture_controlled_run.sh copying "$seed"
+done
+
+for scenario in \
+  archiving \
+  compression \
+  small-build \
+  bulk-editing \
+  rapid-generated-file-replacement \
+  create-delete-churn \
+  paced-replacement
+do
+  for seed in 11 23 37 41 53; do
+    sudo -v
+    scripts/capture_controlled_run.sh "$scenario" "$seed"
+  done
+done
+```
+
+Run one capture at a time. Do not run other file-heavy jobs in the VM during
+collection. The complete loop takes at least 40 minutes because every capture
+is 60 seconds.
+
+If a run fails, do not edit or append to its files. Move all files with that
+run ID into a separate `var/rejected/` directory, record the failure reason,
+and rerun that scenario and seed from fresh output paths.
+
+## 6. Verify the run inventory
+
+Each command below must print `40`:
+
+```bash
+find var/captures -maxdepth 1 -name 'controlled-*.jsonl' | wc -l
+find var/captures -maxdepth 1 -name 'controlled-*.manifest.json' | wc -l
+find var/captures -maxdepth 1 -name 'controlled-*.accepted.json' | wc -l
+find var/features -maxdepth 1 -name 'controlled-*.jsonl' | wc -l
+find var/datasets/runs -maxdepth 1 -name 'controlled-*.jsonl' | wc -l
+```
+
+Check every acceptance record without relying on filename counts alone:
+
+```bash
+.venv/bin/python - <<'PY'
+import json
+from pathlib import Path
+
+paths = sorted(Path("var/captures").glob("controlled-*.accepted.json"))
+assert len(paths) == 40, len(paths)
+for path in paths:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    assert value["status"] == "accepted", path
+    assert value["total_lost_events"] == 0, path
+    assert value["tracked_event_count"] > 0, path
+print("40 accepted, lossless captures")
+PY
+```
+
+## 7. Assemble the experiment dataset
+
+Do not concatenate JSONL files manually. The assembly command requires exactly
+the 40 planned per-run files and rejects missing or unexpected files:
+
+```bash
+.venv/bin/ransomlab dataset assemble \
+  var/datasets/runs \
   --plan var/controlled-workloads.json \
-  --output var/captures/controlled-copying-seed-11.accepted.json
+  --output var/datasets/controlled-v2
 ```
 
-The pipe example is for a live visual check. The durable capture is the
-reproducible training path; do not run both collectors for the same capture.
-Capture failures, a missing terminal `run_end`, any sequence gap, unreadable or
-nonzero loss telemetry, degraded events, a missing exact root-process event or
-exit, plan drift, or a missing runtime manifest invalidate the whole run. Never
-salvage apparently clean windows from a rejected capture.
+It creates:
 
-## Build data and train
+```text
+var/datasets/controlled-v2/all.jsonl
+var/datasets/controlled-v2/selection.jsonl
+var/datasets/controlled-v2/test.jsonl
+var/datasets/controlled-v2/manifest.json
+```
 
-For each successful capture:
+The manifest binds the frozen plan, all 40 run IDs, each raw-capture SHA-256,
+each capture's complete row content, and the exact aggregate file bytes. Review
+it before training:
 
 ```bash
-.venv/bin/ransomlab features var/captures/controlled-copying-seed-11.jsonl \
-  --output var/features/controlled-copying-seed-11.jsonl
-.venv/bin/ransomlab dataset build var/features/controlled-copying-seed-11.jsonl \
-  var/captures/controlled-copying-seed-11.manifest.json \
-  --capture var/captures/controlled-copying-seed-11.jsonl \
-  --plan var/controlled-workloads.json \
-  --output var/datasets/controlled-copying-seed-11.jsonl
+.venv/bin/python -m json.tool var/datasets/controlled-v2/manifest.json | less
+sha256sum var/datasets/controlled-v2/*
 ```
 
-`dataset build` reruns the full capture validator, hashes the raw JSONL, and
-recomputes feature windows from that evidence. The supplied feature file must
-match exactly. It labels only the exact boot/TGID/start-time root identity in
-the runtime manifest. Background activity and descendants remain unlabeled;
-never match a PID by time or numeric similarity.
+## 8. Select the model without test data
 
-Combine rows into two new files in the prescribed order, preserving every line
-exactly: a selection dataset containing only seeds `11`, `23`, `37`, and `41`,
-and a held-out test dataset containing only seed `53`. Do not open, summarize,
-or pass test rows to `train`. The commands fail closed if a capture ID or raw
-capture hash crosses splits, labels are unknown, or feature order differs from
-the fixed schema.
+Training accepts only the manifest-bound `selection.jsonl`, which contains the
+training and validation seeds but no seed-53 rows:
 
 ```bash
-.venv/bin/ransomlab train var/datasets/controlled-selection.jsonl \
-  --output var/artifacts/controlled-v1 --seed 37
-.venv/bin/ransomlab evaluate var/artifacts/controlled-v1 \
-  var/datasets/controlled-test.jsonl
-.venv/bin/ransomlab report var/artifacts/controlled-v1 \
-  --output var/reports/controlled-v1.json
+.venv/bin/ransomlab train \
+  var/datasets/controlled-v2/selection.jsonl \
+  --manifest var/datasets/controlled-v2/manifest.json \
+  --output var/artifacts/controlled-v2 \
+  --seed 37
 ```
 
-Training compares a transparent count/rate rule, a `StandardScaler` + RBF SVM
-pipeline, and a random forest. Hyperparameters are tuned with three-fold
-capture-grouped CV on training data only. The winner and threshold are selected
-on validation F1, then false positives, then a fixed simplicity order. `train`
-rejects test rows. `evaluate` accepts only test rows and writes one immutable
-evaluation record into the artifact; a second evaluation is refused.
+The artifact records the complete selection-row hash, selection file hash,
+aggregate dataset-manifest hash, dependency versions, candidate validation
+metrics, selected model, and threshold.
 
-Artifacts use `skops`, not arbitrary pickle/joblib loading. Their manifest
-records the feature schema and order, split/capture hash, threshold, seed,
-dependency versions, validation metrics, and model-file checksum. The held-out
-evaluation is separately bound to both the artifact-manifest hash and the test
-dataset hash. Loading rejects incompatible or unexpected artifacts.
+## 9. Evaluate the held-out split once
 
-## Required VM evidence
+Run this only after the model and threshold have been accepted. The command
+creates `test-evaluation.json` with exclusive creation and refuses a second
+evaluation in the same artifact directory.
 
-Keep the following with the experiment report:
+```bash
+.venv/bin/ransomlab evaluate \
+  var/artifacts/controlled-v2 \
+  var/datasets/controlled-v2/test.jsonl \
+  --manifest var/datasets/controlled-v2/manifest.json
+```
 
-- `ransomlab doctor` output and `var/lab_versions.txt`.
-- The 40 raw JSONL captures, runtime manifests, feature files, and dataset
-  hashes.
-- A BCC attach/smoke result plus failed-operation, threaded-process, PID-reuse,
-  churn, and forced-loss checks.
-- Validation selection output and the one held-out test report.
-- Event-loss counters and the statement that results concern only the bounded
-  simulations.
+Do not tune the model after reading these results. A new model decision requires
+a new experiment version and a new untouched test set.
 
-The dashboard is localhost-only. From Windows, use the documented SSH tunnel
-in [the lab setup guide](LAB_SETUP.md) rather than exposing port 8000 to a
-network.
+## 10. Export and preserve the evidence
+
+```bash
+.venv/bin/ransomlab report \
+  var/artifacts/controlled-v2 \
+  --output var/reports/controlled-v2.json
+
+find \
+  var/captures \
+  var/features \
+  var/datasets \
+  var/artifacts \
+  -type f -print0 \
+  | sort -z \
+  | xargs -0 sha256sum \
+  > var/reports/SHA256SUMS
+```
+
+Retain the Git commit ID, `var/lab_versions.txt`, integration-gate output,
+plan and plan hash, raw captures, runtime manifests, acceptance records,
+features, aggregate manifest and datasets, artifact, report, and `SHA256SUMS`.
+
+## Feature interpretation
+
+Feature version 2 counts successful `open`, create-intent `open/openat`, and
+`unlink/unlinkat` syscalls in fixed ten-second per-process windows. Failed
+syscalls are excluded. `C` means a successful call made with `O_CREAT`; it does
+not prove that the path was newly created. The collector does not observe file
+content entropy or every write and rename operation. Reported metrics therefore
+apply to these eight controlled scenarios, not to ransomware in general.

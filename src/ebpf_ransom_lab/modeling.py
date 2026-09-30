@@ -56,17 +56,40 @@ class LabeledWindow:
         expected = set(cls.__dataclass_fields__)
         if set(value) != expected:
             raise ValueError("unexpected labeled-window fields")
+        if not isinstance(value["window_id"], str) or not value["window_id"]:
+            raise ValueError("invalid window ID")
+        if not isinstance(value["capture_id"], str) or not value["capture_id"]:
+            raise ValueError("invalid capture ID")
+        if not isinstance(value["capture_hash"], str):
+            raise ValueError("invalid capture hash")
+        if not isinstance(value["split"], str):
+            raise ValueError("invalid split")
+        if type(value["label"]) is not int:
+            raise ValueError("invalid label")
+        if type(value["feature_version"]) is not int:
+            raise ValueError("invalid feature version")
+        if not isinstance(value["feature_names"], (list, tuple)) or any(
+            not isinstance(item, str) for item in value["feature_names"]
+        ):
+            raise ValueError("invalid feature names")
+        if not isinstance(value["features"], (list, tuple)) or any(
+            isinstance(item, bool) or not isinstance(item, (int, float))
+            for item in value["features"]
+        ):
+            raise ValueError("invalid feature values")
+        if type(value["complete"]) is not bool or not isinstance(value["quality"], str):
+            raise ValueError("invalid row quality")
         return cls(
-            window_id=str(value["window_id"]),
-            capture_id=str(value["capture_id"]),
-            capture_hash=str(value["capture_hash"]),
-            split=str(value["split"]),
-            label=value["label"] if value["label"] is None else int(value["label"]),
-            feature_version=int(value["feature_version"]),
-            feature_names=tuple(str(item) for item in value["feature_names"]),
+            window_id=value["window_id"],
+            capture_id=value["capture_id"],
+            capture_hash=value["capture_hash"],
+            split=value["split"],
+            label=value["label"],
+            feature_version=value["feature_version"],
+            feature_names=tuple(value["feature_names"]),
             features=tuple(float(item) for item in value["features"]),
-            complete=value["complete"] is True,
-            quality=str(value["quality"]),
+            complete=value["complete"],
+            quality=value["quality"],
         )
 
 
@@ -79,6 +102,8 @@ class TrainingResult:
     feature_version: int
     random_seed: int
     selection_manifest_hash: str
+    experiment_dataset_manifest_sha256: str
+    selection_dataset_sha256: str
     selection_captures: tuple[str, ...]
     validation_metrics: Mapping[str, Mapping[str, float | int]]
     report_sections: Mapping[str, Mapping[str, object]]
@@ -94,24 +119,45 @@ def validate_dataset(samples: Sequence[LabeledWindow]) -> None:
         raise ValueError("dataset is empty")
     _validate_feature_compatibility(samples, FEATURE_VERSION, FEATURE_NAMES)
     capture_splits: dict[str, str] = {}
-    hash_splits: dict[str, str] = {}
+    capture_hashes: dict[str, str] = {}
+    capture_labels: dict[str, int] = {}
+    hash_captures: dict[str, str] = {}
+    window_ids: set[str] = set()
     for sample in samples:
-        if sample.split not in SPLITS:
+        if not isinstance(sample.split, str) or sample.split not in SPLITS:
             raise ValueError("unknown split")
-        if sample.label not in (0, 1):
+        if type(sample.label) is not int or sample.label not in (0, 1):
             raise ValueError("unlabeled windows cannot be used for training")
-        if not sample.complete or sample.quality != "good":
+        if type(sample.complete) is not bool or not sample.complete or sample.quality != "good":
             raise ValueError("only complete good-quality windows can be trained")
-        if not sample.window_id or not sample.capture_id:
+        if (
+            not isinstance(sample.window_id, str)
+            or not sample.window_id
+            or not isinstance(sample.capture_id, str)
+            or not sample.capture_id
+        ):
             raise ValueError("window and capture identifiers are required")
-        if len(sample.capture_hash) != 64 or any(character not in "0123456789abcdef" for character in sample.capture_hash):
+        if sample.window_id in window_ids:
+            raise ValueError("duplicate window ID")
+        window_ids.add(sample.window_id)
+        if (
+            not isinstance(sample.capture_hash, str)
+            or len(sample.capture_hash) != 64
+            or any(character not in "0123456789abcdef" for character in sample.capture_hash)
+        ):
             raise ValueError("capture hash must be lowercase SHA-256")
         prior = capture_splits.setdefault(sample.capture_id, sample.split)
         if prior != sample.split:
             raise ValueError("capture appears across splits")
-        hash_prior = hash_splits.setdefault(sample.capture_hash, sample.split)
-        if hash_prior != sample.split:
-            raise ValueError("capture hash appears across splits")
+        hash_prior = capture_hashes.setdefault(sample.capture_id, sample.capture_hash)
+        if hash_prior != sample.capture_hash:
+            raise ValueError("capture ID has multiple raw hashes")
+        label_prior = capture_labels.setdefault(sample.capture_id, sample.label)
+        if label_prior != sample.label:
+            raise ValueError("capture ID has multiple labels")
+        capture_prior = hash_captures.setdefault(sample.capture_hash, sample.capture_id)
+        if capture_prior != sample.capture_id:
+            raise ValueError("capture hash is assigned to multiple capture IDs")
 
 
 def load_dataset(lines: Iterable[str]) -> tuple[LabeledWindow, ...]:
@@ -131,10 +177,18 @@ def load_dataset(lines: Iterable[str]) -> tuple[LabeledWindow, ...]:
     return result
 
 
-def train_and_select(samples: Sequence[LabeledWindow], *, random_seed: int = 37) -> TrainingResult:
+def train_and_select(
+    samples: Sequence[LabeledWindow], *, random_seed: int = 37,
+    experiment_dataset_manifest_sha256: str,
+    selection_dataset_sha256: str,
+) -> TrainingResult:
     """Tune on training groups and select on validation without reading test rows."""
     samples = tuple(samples)
     validate_dataset(samples)
+    if type(random_seed) is not int or not 0 <= random_seed < 2**64:
+        raise ValueError("random_seed must be an unsigned 64-bit integer")
+    _validate_sha256(experiment_dataset_manifest_sha256, "experiment dataset manifest")
+    _validate_sha256(selection_dataset_sha256, "selection dataset")
     if any(sample.split == "test" for sample in samples):
         raise ValueError("test samples must remain withheld during model selection")
     by_split = {name: tuple(sample for sample in samples if sample.split == name) for name in SPLITS}
@@ -188,6 +242,8 @@ def train_and_select(samples: Sequence[LabeledWindow], *, random_seed: int = 37)
         feature_version=FEATURE_VERSION,
         random_seed=random_seed,
         selection_manifest_hash=manifest_hash,
+        experiment_dataset_manifest_sha256=experiment_dataset_manifest_sha256,
+        selection_dataset_sha256=selection_dataset_sha256,
         selection_captures=tuple(sorted({sample.capture_id for sample in samples})),
         validation_metrics=validation_metrics,
         report_sections=report_sections,
@@ -298,6 +354,20 @@ def _metrics(labels: np.ndarray, predictions: np.ndarray) -> dict[str, float | i
 
 
 def _selection_manifest_hash(samples: Sequence[LabeledWindow]) -> str:
-    captures = sorted({(sample.capture_id, sample.capture_hash, sample.split) for sample in samples})
-    encoded = json.dumps(captures, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+    rows = sorted(
+        (sample.as_dict() for sample in samples),
+        key=lambda row: (str(row["capture_id"]), str(row["window_id"])),
+    )
+    encoded = json.dumps(
+        rows, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("ascii")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _validate_sha256(value: object, name: str) -> None:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"invalid {name} hash")

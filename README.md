@@ -1,126 +1,128 @@
 <p align="center">
-  <img src="src/ebpf_ransom_lab/static/logo.png" width="128" alt="Pixel-art telemetry shield logo">
+  <img src="src/ebpf_ransom_lab/static/logo.png" width="128" alt="eBPF Ransom Lab logo">
 </p>
 
 # eBPF Ransom Lab
 
-A reproducible, alert-only research prototype for detecting suspicious Linux
-file-operation behavior. It keeps two things deliberately separate: auditing
-the published `ebpfangel` experiment and building a controlled, safe live
-demonstration. It is not a production anti-ransomware product.
+eBPF Ransom Lab is a Linux research project for detecting high-volume file
+activity. It captures file operations with eBPF, builds fixed ten-second
+behavioral features, scores them, and displays alerts in a local dashboard.
 
-## Status
+The repository also contains a reproducible audit of the published `ebpfangel`
+dataset and preprocessing pipeline.
 
-Milestones 1–2 are complete and committed. Milestones 3–5 are now
-**training-ready**: portable replay, dashboard, collector protocol/ABI,
-bounded workloads, deterministic splits, grouped training, model artifacts,
-and reports are implemented and covered by portable tests.
+## Project status
 
-The Ubuntu-VM gates remain intentionally open: BCC compile/attach, syscall
-stress tests, the 40 real sixty-second captures, and the final held-out model
-evaluation must be run in the pinned Linux VM. This repository does not claim
-those measurements have happened on this Windows host.
+The portable pipeline is implemented and covered by automated tests:
 
-| Track | State |
-|---|---|
-| Published-data audit | Complete; corrected experiment blocked by incomplete label provenance |
-| Replay → dashboard | Ready on any supported host |
-| BCC collector | Implemented and portable-contract tested; requires Ubuntu VM validation |
-| Controlled workloads → model | Ready; requires real VM captures before fitting a result worth reporting |
+- strict, versioned JSONL telemetry with complete run envelopes;
+- replay and live feature extraction;
+- a localhost FastAPI dashboard backed by SQLite;
+- a BCC collector with explicit ABI and loss counters;
+- bounded controlled workloads and fixed data splits;
+- 40-run aggregate dataset manifests and grouped model selection;
+- strictly validated, dataset-bound `skops` artifacts;
+- capture validation tied to raw hashes, workload manifests, and the experiment
+  plan.
 
-## Quick start: replay the dashboard
+The portable gate is implemented. The Ubuntu/BCC gate, 40 controlled captures,
+and final held-out evaluation must be executed in the lab VM before reporting
+performance results.
+
+## Quick start
 
 Python 3.12 is required.
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python -m pip install -r requirements.lock
-.\.venv\Scripts\python -m pip install --no-deps -e .
-.\.venv\Scripts\ransomlab replay examples\replay-demo.jsonl --capture-start-ns 0 --capture-end-ns 10000000000 --threshold 0.2 --database var\demo.sqlite
-.\.venv\Scripts\ransomlab serve --database var\demo.sqlite
+```bash
+python3.12 -m venv .venv
+.venv/bin/python -m pip install --require-hashes -r requirements.lock
+.venv/bin/python -m pip install --no-deps -e .
+.venv/bin/ransomlab replay examples/replay-demo.jsonl \
+  --threshold 0.2 \
+  --database var/demo.sqlite
+.venv/bin/ransomlab serve --database var/demo.sqlite
 ```
 
-Open <http://127.0.0.1:8000>. The bundled recording is intentionally tiny and
-uses a low rule threshold only to demonstrate the alert path. Scores are not
-probabilities.
+Open <http://127.0.0.1:8000>. On Windows, use `.venv\Scripts\` instead of
+`.venv/bin/`.
 
-Run the portable quality gate with:
+Run the portable test gate with:
 
-```powershell
-.\.venv\Scripts\python -m coverage run -m unittest discover -s tests -v
-.\.venv\Scripts\python -m coverage report
+```bash
+.venv/bin/python -m coverage run -m unittest discover -s tests -v
+.venv/bin/python -m coverage report
 ```
 
-## Training workflow
-
-The workflow is designed to prevent the usual research leaks: the split is
-fixed before training, capture groups never cross folds, background activity is
-unlabeled, and an entire capture is rejected when it is truncated, lossy,
-degraded, detached from the frozen plan, or missing the tracked process exit.
+## Pipeline
 
 ```text
-bounded workload + 60-second collector capture
-  → normalized JSONL
-  → lossless capture acceptance + raw SHA-256
-  → fixed 10-second feature windows
-  → manifest-bound labeled dataset rows
-  → grouped CV + validation selection
-  → safe local artifact + one held-out test evaluation
+BCC collector or complete JSONL recording
+  -> normalized file-operation records
+  -> successful-operation, ten-second process windows
+  -> transparent rule score
+  -> SQLite
+  -> local dashboard and alerts
 ```
 
-Create the immutable 40-capture plan first:
+Controlled training adds three provenance gates before model selection:
 
-```powershell
-ransomlab workload plan --output var\controlled-workloads.json
+```text
+fixed workload plan
+  -> 60-second raw capture
+  -> lossless capture validation and SHA-256
+  -> per-run labeled rows
+  -> 40-run aggregate manifest and full-row hashes
+  -> grouped training and validation
+  -> one held-out test evaluation
 ```
 
-The fixed seeds are `11, 23, 37` for training, `41` for validation, and `53`
-for final test, across five benign and three suspicious-behavior simulations.
-See [the training guide](docs/TRAINING_GUIDE.md) for the VM commands and
-manifest-to-dataset sequence.
+Create the fixed 40-run experiment plan with:
 
-## Safety boundaries
+```bash
+.venv/bin/ransomlab workload plan --output var/controlled-workloads.json
+```
 
-- No malware is downloaded, executed, or needed.
-- Every workload uses a fresh generated child directory; symlinks, traversal,
-  arbitrary target directories, and resource-limit bypasses are rejected.
-- Controlled workloads refuse to run as root. Only their exact root-process
-  identity is labeled; unrelated activity and unverified descendants remain
-  unlabeled.
-- Only `ransomlab collect` runs as root, on Linux. Its JSONL output is consumed
-  by an ordinary-user service.
-- A collector run is complete only when its terminal `run_end` is present and
-  kernel loss counters were readable. Dataset construction revalidates the raw
-  recording and recomputes its feature rows before labeling.
-- The dashboard binds only to `127.0.0.1`, contains no CDN dependency, and
-  renders telemetry as text rather than HTML.
-- The published corpus remains frozen; its unresolved labels are never silently
-  treated as benign.
+Seeds `11`, `23`, and `37` are assigned to training, `41` to validation, and
+`53` to the held-out test set. The complete capture workflow is in the
+[training guide](docs/TRAINING_GUIDE.md).
 
-## Key commands
+## Main commands
 
 | Command | Purpose |
 |---|---|
-| `ransomlab doctor` | Check app or collector prerequisites |
-| `ransomlab audit <checkout>` | Reproduce the deterministic upstream-input audit |
-| `ransomlab features <recording>` | Create fixed live-window feature records |
-| `ransomlab replay <recording>` | Populate SQLite with rule predictions and alerts |
-| `ransomlab serve` | Run the localhost dashboard; optionally consume a JSONL pipe |
-| `ransomlab collect` | Run the privileged BCC sensor in the Ubuntu VM |
-| `ransomlab workload plan/run` | Plan or safely execute a controlled scenario |
-| `ransomlab capture validate` | Bind a complete, lossless raw capture to its plan and runtime manifest |
-| `ransomlab dataset build` | Label only manifest-tracked workload processes |
-| `ransomlab train/evaluate/report` | Select without test data, evaluate the held-out test once, and export a report |
+| `ransomlab doctor` | Check application or collector prerequisites |
+| `ransomlab reference verify` | Verify the pinned upstream reference |
+| `ransomlab audit` | Rebuild and compare the published feature tables |
+| `ransomlab collect` | Run the Linux BCC collector |
+| `ransomlab features` | Generate ten-second feature windows |
+| `ransomlab replay` | Score a recording and populate SQLite |
+| `ransomlab serve` | Start the local dashboard |
+| `ransomlab workload plan/run` | Plan or execute a controlled workload |
+| `ransomlab capture validate` | Validate a raw controlled capture |
+| `ransomlab dataset build/assemble` | Build per-run rows and bind all 40 runs |
+| `ransomlab train/evaluate/report` | Train, evaluate, and export model results |
+
+## Operating boundaries
+
+- Collection runs as root on Linux; the dashboard, workloads, and model tools
+  run as an ordinary user.
+- Workloads operate only in generated directories with file, byte, and time
+  limits.
+- Replay, feature extraction, and live ingestion reject incomplete, lossy,
+  degraded, sequence-gapped, or result-less collector streams.
+- Feature version 2 counts successful open, create-intent, and delete syscalls;
+  it does not measure content entropy or every write/rename operation.
+- The dashboard listens on `127.0.0.1` and uses no external frontend assets.
+- The project generates suspicious file behavior with disposable files; it does
+  not require malware samples.
 
 ## Documentation
 
-- [Project plan](docs/PROJECT_PLAN.md)
-- [Training and VM capture guide](docs/TRAINING_GUIDE.md)
-- [Ubuntu / VirtualBox setup](docs/LAB_SETUP.md)
-- [Published-data audit findings](docs/MILESTONE_2.md)
-- [Frozen upstream attribution](references/README.md) and
-  [third-party notices](THIRD_PARTY_NOTICES.md)
+- [Ubuntu lab setup](docs/LAB_SETUP.md)
+- [Controlled capture and training](docs/TRAINING_GUIDE.md)
+- [Published-data audit](docs/PUBLISHED_DATA_AUDIT.md)
+- [Upstream reference](references/README.md)
+- [Third-party notices](THIRD_PARTY_NOTICES.md)
 
-Generated captures, model artifacts, reports, and VM images are ignored by
-Git. Keep the Linux checkout on the VM filesystem rather than a Windows shared
-folder.
+Generated captures, databases, artifacts, reports, and VM images are excluded
+from Git.

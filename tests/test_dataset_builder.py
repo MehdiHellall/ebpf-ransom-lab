@@ -5,8 +5,15 @@ import unittest
 from pathlib import Path
 
 from ebpf_ransom_lab.contracts import FeatureWindow, ProcessIdentity
-from ebpf_ransom_lab.dataset import build_labeled_windows, load_workload_manifest
-from ebpf_ransom_lab.features import FEATURE_NAMES
+from ebpf_ransom_lab.dataset import (
+    assemble_experiment_dataset,
+    build_labeled_windows,
+    load_manifest_bound_dataset,
+    load_workload_manifest,
+    write_labeled_windows,
+)
+from ebpf_ransom_lab.features import FEATURE_NAMES, FEATURE_VERSION
+from ebpf_ransom_lab.modeling import LabeledWindow
 from ebpf_ransom_lab.recording import write_jsonl
 from ebpf_ransom_lab.workloads import (
     EXPERIMENT_WORKLOAD_HOLD_SECONDS,
@@ -15,6 +22,7 @@ from ebpf_ransom_lab.workloads import (
     MAX_WORKLOAD_SECONDS,
     plan_sha256,
     plan_workload,
+    build_experiment_manifest,
 )
 
 
@@ -102,6 +110,57 @@ class DatasetBuilderTests(unittest.TestCase):
         path = self.path / "run-manifest.json"
         path.write_text(json.dumps(self.manifest()), encoding="utf-8")
         self.assertEqual("training", load_workload_manifest(path).split)
+
+    def test_aggregate_manifest_requires_and_binds_all_forty_runs(self):
+        inputs = self.path / "per-run"
+        inputs.mkdir()
+        plan_document = build_experiment_manifest()
+        plan_path = self.path / "plan.json"
+        plan_path.write_text(json.dumps(plan_document), encoding="utf-8")
+        for index, planned in enumerate(plan_document["runs"]):
+            run_id = planned["run_id"]
+            row = LabeledWindow(
+                window_id=f"window-{index}",
+                capture_id=run_id,
+                capture_hash=hashlib.sha256(run_id.encode()).hexdigest(),
+                split=planned["split"],
+                label=0 if planned["behavior_label"] == "benign" else 1,
+                feature_version=FEATURE_VERSION,
+                feature_names=FEATURE_NAMES,
+                features=tuple(float(index) for _ in FEATURE_NAMES),
+                complete=True,
+                quality="good",
+            )
+            write_labeled_windows(inputs / f"{run_id}.jsonl", (row,))
+
+        output = self.path / "aggregate"
+        manifest = assemble_experiment_dataset(inputs, plan_path, output)
+        self.assertEqual(40, manifest["expected_run_count"])
+        self.assertEqual(40, manifest["row_count"])
+        selection, manifest_hash = load_manifest_bound_dataset(
+            output / "selection.jsonl", output / "manifest.json", role="selection"
+        )
+        test, same_manifest_hash = load_manifest_bound_dataset(
+            output / "test.jsonl", output / "manifest.json", role="test"
+        )
+        self.assertEqual(32, len(selection))
+        self.assertEqual(8, len(test))
+        self.assertEqual(manifest_hash, same_manifest_hash)
+
+        with (output / "selection.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write("\n")
+        with self.assertRaisesRegex(ValueError, "byte hash"):
+            load_manifest_bound_dataset(
+                output / "selection.jsonl", output / "manifest.json", role="selection"
+            )
+
+    def test_aggregate_manifest_rejects_a_missing_planned_run(self):
+        inputs = self.path / "per-run"
+        inputs.mkdir()
+        plan = self.path / "plan.json"
+        plan.write_text(json.dumps(build_experiment_manifest()), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "missing"):
+            assemble_experiment_dataset(inputs, plan, self.path / "aggregate")
 
 
 if __name__ == "__main__":

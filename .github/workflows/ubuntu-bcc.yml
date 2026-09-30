@@ -1,0 +1,20 @@
+name: ubuntu-bcc-integration
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  collector-gate:
+    runs-on: [self-hosted, Linux, X64, ebpf-bcc]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Prepare Ubuntu 24.04 environment
+        run: scripts/bootstrap_ubuntu.sh
+      - name: Run portable and live BCC gates
+        run: scripts/ubuntu_bcc_gate.sh

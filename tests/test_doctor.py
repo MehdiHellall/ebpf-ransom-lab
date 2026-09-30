@@ -56,6 +56,14 @@ class DoctorTests(unittest.TestCase):
         python_check = next(check for check in checks if check.name == "python")
         self.assertEqual(Status.FAIL, python_check.status)
 
+    def test_application_scope_rejects_python_above_package_upper_bound(self):
+        checks = evaluate_doctor(
+            self.make_context(python_version=(3, 13, 0)), "app"
+        )
+
+        python_check = next(check for check in checks if check.name == "python")
+        self.assertEqual(Status.FAIL, python_check.status)
+
     def test_collector_scope_fails_outside_linux(self):
         checks = evaluate_doctor(self.make_context(system="Windows"), "collector")
 

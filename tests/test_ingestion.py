@@ -14,9 +14,11 @@ class IngestionTests(unittest.TestCase):
     def test_pipe_ingestion_uses_the_same_window_rule_and_health_path(self):
         identity = ProcessIdentity("boot", 8, 9)
         records = (
-            Event("run", 1, 0, identity, 8, "C"),
-            Event("run", 2, 1, identity, 8, "D"),
+            RunStart("run", 0, source="live"),
+            Event("run", 1, 0, identity, 8, "C", result=0),
+            Event("run", 2, 1, identity, 8, "D", result=0),
             Heartbeat("run", 3, WINDOW_NS),
+            RunEnd("run", 4, WINDOW_NS),
         )
         stream = io.StringIO("".join(json.dumps(record.to_dict()) + "\n" for record in records))
         with tempfile.TemporaryDirectory() as directory:
@@ -41,7 +43,7 @@ class IngestionTests(unittest.TestCase):
         identity = ProcessIdentity("boot", 8, 9)
         records = (
             RunStart("run", 0, source="live"),
-            Event("run", 1, 0, identity, 8, "O"),
+            Event("run", 1, 0, identity, 8, "O", result=3),
             Heartbeat("run", 2, WINDOW_NS),
             RunEnd("run", 3, WINDOW_NS),
         )
@@ -51,6 +53,38 @@ class IngestionTests(unittest.TestCase):
             store.initialize()
             summary = ingest_jsonl_stream(stream, store)
             self.assertEqual(1, summary.windows)
+
+    def test_invalid_terminal_stream_leaves_no_partial_run_data(self):
+        identity = ProcessIdentity("boot", 8, 9)
+        records = (
+            RunStart("run", 0, source="live"),
+            Event("run", 1, 0, identity, 8, "C", result=3),
+            Heartbeat("run", 3, WINDOW_NS),
+            RunEnd("run", 4, WINDOW_NS),
+        )
+        stream = io.StringIO("".join(json.dumps(record.to_dict()) + "\n" for record in records))
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "runs.sqlite")
+            store.initialize()
+            with self.assertRaisesRegex(ValueError, "sequence"):
+                ingest_jsonl_stream(stream, store)
+            self.assertEqual((), store.list_runs(limit=10, offset=0))
+            self.assertEqual(0, store.metrics()["windows"])
+
+    def test_lossy_stream_is_rejected_without_persisting_alerts(self):
+        identity = ProcessIdentity("boot", 8, 9)
+        records = (
+            RunStart("run", 0, source="live"),
+            Event("run", 1, 0, identity, 8, "D", result=0, lost_events=1),
+            RunEnd("run", 2, WINDOW_NS, total_lost_events=1),
+        )
+        stream = io.StringIO("".join(json.dumps(record.to_dict()) + "\n" for record in records))
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "runs.sqlite")
+            store.initialize()
+            with self.assertRaisesRegex(ValueError, "lost events"):
+                ingest_jsonl_stream(stream, store, threshold=0.0)
+            self.assertEqual(0, store.metrics()["active_alerts"])
 
 
 if __name__ == "__main__":

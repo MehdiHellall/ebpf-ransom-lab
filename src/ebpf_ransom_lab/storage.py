@@ -5,7 +5,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from ebpf_ransom_lab.contracts import FeatureWindow
 from ebpf_ransom_lab.detection import Prediction
@@ -132,38 +132,61 @@ class Store:
 
     def upsert_prediction(self, prediction: Prediction) -> None:
         with self._connect() as connection:
-            connection.execute(
-                """INSERT INTO predictions(
-                    window_id, model_version, score, threshold, suspicious, quality,
-                    supporting_features
-                ) VALUES(?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(window_id) DO UPDATE SET model_version=excluded.model_version,
-                    score=excluded.score, threshold=excluded.threshold,
-                    suspicious=excluded.suspicious, quality=excluded.quality,
-                    supporting_features=excluded.supporting_features""",
-                (
-                    prediction.window_id, prediction.model_version, prediction.score,
-                    prediction.threshold,
-                    None if prediction.suspicious is None else int(prediction.suspicious),
-                    prediction.quality, _json(prediction.supporting_features),
-                ),
-            )
+            _upsert_prediction(connection, prediction)
+            if prediction.suspicious is not True:
+                connection.execute(
+                    "UPDATE alerts SET valid=0 WHERE window_id=?",
+                    (prediction.window_id,),
+                )
 
     def create_alert(self, prediction: Prediction, window: FeatureWindow) -> None:
         if prediction.suspicious is not True or prediction.score is None:
             return
         with self._connect() as connection:
+            _upsert_alert(connection, prediction, window)
+
+    def replace_run_analysis(
+        self,
+        run_id: str,
+        *,
+        source: str,
+        started_ns: int,
+        windows: Sequence[FeatureWindow],
+        predictions: Sequence[Prediction],
+    ) -> None:
+        """Atomically replace one run and every derived dashboard record."""
+
+        if not run_id or source not in {"replay", "live", "controlled-workload"}:
+            raise ValueError("invalid run")
+        if len(windows) != len(predictions):
+            raise ValueError("every window must have exactly one prediction")
+        if any(window.run_id != run_id for window in windows):
+            raise ValueError("window run ID does not match transaction run")
+        if any(
+            prediction.window_id != window.window_id
+            for window, prediction in zip(windows, predictions, strict=True)
+        ):
+            raise ValueError("prediction does not match its window")
+
+        with self._connect() as connection:
+            connection.execute("DELETE FROM alerts WHERE run_id=?", (run_id,))
             connection.execute(
-                """INSERT OR IGNORE INTO alerts(
-                    window_id, run_id, boot_id, tgid, start_time_ns, score,
-                    supporting_features, valid
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, 1)""",
-                (
-                    window.window_id, window.run_id, window.process.boot_id,
-                    str(window.process.tgid), str(window.process.start_time_ns),
-                    prediction.score, _json(prediction.supporting_features),
-                ),
+                "DELETE FROM predictions WHERE window_id IN "
+                "(SELECT window_id FROM windows WHERE run_id=?)",
+                (run_id,),
             )
+            connection.execute("DELETE FROM windows WHERE run_id=?", (run_id,))
+            connection.execute(
+                "INSERT INTO runs(run_id, source, started_ns, status) VALUES(?, ?, ?, 'complete') "
+                "ON CONFLICT(run_id) DO UPDATE SET source=excluded.source, "
+                "started_ns=excluded.started_ns, status=excluded.status",
+                (run_id, source, str(started_ns)),
+            )
+            for window, prediction in zip(windows, predictions, strict=True):
+                _upsert_window(connection, window)
+                _upsert_prediction(connection, prediction)
+                if prediction.suspicious is True:
+                    _upsert_alert(connection, prediction, window)
 
     def update_health(self, *, connected: bool, event_rate: float, lost_events: int,
                       recording: bool, error: str | None) -> None:
@@ -245,3 +268,64 @@ class Store:
 
 def _json(value: object) -> str:
     return json.dumps(value, separators=(",", ":"), ensure_ascii=True)
+
+
+def _upsert_window(connection: sqlite3.Connection, window: FeatureWindow) -> None:
+    quality = ",".join(window.quality)
+    connection.execute(
+        """INSERT INTO windows(
+            window_id, run_id, boot_id, tgid, start_time_ns, start_ns, end_ns,
+            feature_version, feature_names, feature_values, quality, classifiable
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(window_id) DO UPDATE SET
+            feature_values=excluded.feature_values, quality=excluded.quality,
+            classifiable=excluded.classifiable""",
+        (
+            window.window_id, window.run_id, window.process.boot_id,
+            str(window.process.tgid), str(window.process.start_time_ns),
+            str(window.start_ns), str(window.end_ns), str(window.feature_version),
+            _json(window.feature_names), _json(window.values), quality,
+            int(window.classifiable),
+        ),
+    )
+
+
+def _upsert_prediction(connection: sqlite3.Connection, prediction: Prediction) -> None:
+    connection.execute(
+        """INSERT INTO predictions(
+            window_id, model_version, score, threshold, suspicious, quality,
+            supporting_features
+        ) VALUES(?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(window_id) DO UPDATE SET model_version=excluded.model_version,
+            score=excluded.score, threshold=excluded.threshold,
+            suspicious=excluded.suspicious, quality=excluded.quality,
+            supporting_features=excluded.supporting_features""",
+        (
+            prediction.window_id, prediction.model_version, prediction.score,
+            prediction.threshold,
+            None if prediction.suspicious is None else int(prediction.suspicious),
+            prediction.quality, _json(prediction.supporting_features),
+        ),
+    )
+
+
+def _upsert_alert(
+    connection: sqlite3.Connection, prediction: Prediction, window: FeatureWindow
+) -> None:
+    if prediction.suspicious is not True or prediction.score is None:
+        return
+    connection.execute(
+        """INSERT INTO alerts(
+            window_id, run_id, boot_id, tgid, start_time_ns, score,
+            supporting_features, valid
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, 1)
+        ON CONFLICT(window_id) DO UPDATE SET
+            score=excluded.score,
+            supporting_features=excluded.supporting_features,
+            valid=1""",
+        (
+            window.window_id, window.run_id, window.process.boot_id,
+            str(window.process.tgid), str(window.process.start_time_ns),
+            prediction.score, _json(prediction.supporting_features),
+        ),
+    )
