@@ -4,6 +4,24 @@ This runbook starts at a clean Ubuntu 24.04 VM and ends with a report tied to
 all 40 planned captures. Run collector commands with `sudo`; run workloads,
 dataset tools, training, and the dashboard as the ordinary lab user.
 
+## 0. Provision the required VM
+
+Create the Ubuntu Server 24.04 LTS VirtualBox guest described in the
+[Ubuntu lab setup](LAB_SETUP.md). The recommended profile is 4 virtual CPUs,
+8 GB RAM, a 40 GB dynamically allocated disk, NAT networking, and OpenSSH.
+Keep the repository on the guest's Linux filesystem, not in a shared folder.
+
+Before bootstrap, prove that the guest—not the host—is the active shell:
+
+```bash
+. /etc/os-release
+test "$VERSION_ID" = "24.04" || { echo "Ubuntu 24.04 is required"; exit 1; }
+python3 -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
+```
+
+Stop if either check fails. In particular, Ubuntu 26.04 with Python 3.14 is
+not the controlled experiment environment.
+
 ## 1. Freeze the revision
 
 Use one reviewed commit for the complete experiment. Do not change source,
@@ -28,12 +46,26 @@ scripts/bootstrap_ubuntu.sh
 The Python lock uses SHA-256 hashes. The bootstrap records the kernel, Python,
 APT, and Python package versions in `var/lab_versions.txt`.
 
+Confirm that bootstrap created the supported environment and CLI:
+
+```bash
+.venv/bin/python --version
+test -x .venv/bin/ransomlab
+```
+
+The version must be Python 3.12. If the executable check fails, stop and fix
+the VM rather than mixing another Python installation with the system BCC
+bindings.
+
 Authorize `sudo` for the upcoming non-interactive collector command, then run
 the portable and live integration gate:
 
 ```bash
+mkdir -p var/reports
 sudo -v
-scripts/ubuntu_bcc_gate.sh
+set -o pipefail
+scripts/ubuntu_bcc_gate.sh 2>&1 \
+  | tee var/reports/ubuntu-bcc-gate.log
 ```
 
 Do not start the experiment unless this ends with:
